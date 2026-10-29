@@ -31,3 +31,9 @@ frontend/dist/
 frontend/.vscode/
 .DS_Store
 Thumbs.db
+
+# ==================== 7. 本地测试目录（内容不入库，仅保留目录空壳） ====================
+backend/tests/*
+!backend/tests/.gitkeep
+frontend/tests/*
+!frontend/tests/.gitkeep
