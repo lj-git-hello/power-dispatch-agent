@@ -214,7 +214,12 @@ async def a2ui_agent_chat_stream(req: AgentChatRequest):
         try:
             payload = req.action_payload or {}
             decision_raw = payload.get("decision") or payload.get("action")
-            opinion = str(payload.get("opinion") or payload.get("comment") or "").strip()
+            # 兼容第三阶段前端契约：{'is_permitted': bool, 'reason': str}
+            if decision_raw is None and isinstance(payload.get("is_permitted"), bool):
+                decision_raw = "APPROVED" if payload["is_permitted"] else "REJECTED"
+            opinion = str(
+                payload.get("opinion") or payload.get("comment") or payload.get("reason") or ""
+            ).strip()
 
             # ---------- 分支 B：前端卡片交互唤醒驱动（调度长批准/驳回） ----------
             if decision_raw is not None:
