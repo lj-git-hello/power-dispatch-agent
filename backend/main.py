@@ -15,6 +15,7 @@ from app.agent.graph import (
     create_dispatch_graph,
     RISK_DECISION_MARKER,
     INTENT_ROUTER_TAG,
+    SUBMIT_CHANNEL_PLAN_FIELDS,
 )
 from app.schemas.dispatch import (
     PlanApplyRequest,
@@ -288,6 +289,18 @@ async def a2ui_agent_chat_stream(req: AgentChatRequest):
                 return
 
             snapshot_before = await graph_app.aget_state(config)
+            if snapshot_before and (snapshot_before.values or {}).get("status") in (
+                "PERMITTED",
+                "REJECTED",
+            ):
+                # 终态封口：工单已办结，拒绝文本驱动重跑全图，引导前端开新会话
+                yield _a2ui_sse(
+                    A2UIEventType.ERROR,
+                    message="本工单已办结，请点击左侧【＋ 发起新申报 / 问答】开启新会话。",
+                )
+                yield _a2ui_sse(A2UIEventType.DONE)
+                return
+
             if snapshot_before and "dispatcher_approval" in (snapshot_before.next or ()):
                 # 挂起保护：线程仍等待调度长核准，拒绝文本输入污染流程，重发核准卡片等待操作
                 state_before = dict(snapshot_before.values)
@@ -354,7 +367,9 @@ async def dispatch_stream(req: PlanApplyRequest):
         "voltage_level": req.voltage_level,
         "work_content": req.work_content,
         "safety_measures": req.safety_measures,
-        "status": "INIT"
+        "status": "INIT",
+        # 结构化字段直连入口：置位提交渠道，允许意图节点确定性短路
+        "submit_channel": SUBMIT_CHANNEL_PLAN_FIELDS,
     }
 
     async def event_generator():

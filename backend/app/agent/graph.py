@@ -19,6 +19,12 @@ RISK_DECISION_MARKER = "---RISK_DECISION---"  # 安规研判结构化判定分�
 INTENT_ROUTER_TAG = "intent_router"           # 意图研判节点专属 Tag，供 SSE 网关过滤结构化噪声流
 HIGH_RISK_KV_THRESHOLD = 110                  # 110kV 及以上判定为高压电网重大检修
 MAX_HISTORY_MESSAGES = 12                     # 意图研判 / 安规问答携带的最大历史消息条数
+# 提交渠道：仅遗留 REST 申报入口携带结构化业务字段直连，普通对话入口不允许短路
+SUBMIT_CHANNEL_PLAN_FIELDS = "PLAN_FIELDS"
+# 大模型调用超时（秒），均可被环境变量覆盖；意图研判与正文生成分别收口
+ROUTER_TIMEOUT_SECONDS = float(os.getenv("LLM_ROUTER_TIMEOUT", "12"))
+LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT", "30"))
+LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
 # LLM 熔断降级后的关键词兜底规则
 PLAN_APPLY_KEYWORDS = ("申报", "检修计划", "停电检修", "申请开工", "工作票")
 
@@ -30,6 +36,8 @@ class GraphState(TypedDict):
     # —— 对话上下文（Chat 模式）——
     messages: Annotated[list, add_messages]                # 对话消息记录（多轮累积持久化）
     intent: Literal["QA", "PLAN_APPLY", "DISPATCH_PERMIT"]  # 意图路由结果
+    # 提交渠道标记：仅结构化字段直连的遗留 REST 申报入口置位，用于区分确定性短路与普通对话
+    submit_channel: Optional[str]
 
     # —— 申报工单业务字段（Plan 模式）——
     plan_id: str                        # 作业单号
@@ -55,8 +63,10 @@ llm = ChatOpenAI(
     model=os.getenv("OPENAI_MODEL_NAME", "deepseek-chat"),
     api_key=os.getenv("OPENAI_API_KEY", ""),
     base_url=os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1"),
-    temperature=0.1,  # 规程研判类业务，采用低温确保事实准确性与严格遵守规程
-    streaming=True    # 必须开启流式，支持下游 astream_events Token 监听
+    temperature=0.1,   # 规程研判类业务，采用低温确保事实准确性与严格遵守规程
+    streaming=True,    # 支持 astream_events Token 监听
+    timeout=LLM_TIMEOUT_SECONDS,  # 统一调用超时，杜绝长尾挂死
+    max_retries=LLM_MAX_RETRIES,  # 内置失败重试
 )
 
 
@@ -125,8 +135,13 @@ async def intent_router_node(state: GraphState):
 
     三级判定策略：结构化字段直连（确定性）-> LLM 低温研判（强 Schema）-> 关键词规则兜底（熔断降级）
     """
-    # 1) 确定性优先：结构化申报字段直连（兼容既有 /dispatch/stream REST 入口），零 Token 消耗
-    if state.get("voltage_level") and state.get("work_content"):
+    # 1) 确定性直连：仅遗留 REST 申报入口（submit_channel=PLAN_FIELDS）携带结构化字段时短路，
+    #    零 Token 消耗。普通对话入口即便检查点残留旧工单字段也不允许短路，避免污染新输入。
+    if (
+        state.get("submit_channel") == SUBMIT_CHANNEL_PLAN_FIELDS
+        and state.get("voltage_level")
+        and state.get("work_content")
+    ):
         return {
             "intent": "PLAN_APPLY",
             "status": "INIT",
@@ -140,14 +155,17 @@ async def intent_router_node(state: GraphState):
             last_user_text = msg.content
             break
 
-    # 2) LLM 低温研判（强类型 Schema 约束输出，严禁正则截取自然语言）
+    # 2) LLM 低温研判（强类型 Schema 约束输出，严禁正则截取自然语言），超时强制兜底
     decision: Optional[IntentDecision] = None
     try:
-        decision = await router_llm.ainvoke(
-            [SystemMessage(content=INTENT_SYSTEM_PROMPT), *history]
+        decision = await asyncio.wait_for(
+            router_llm.ainvoke(
+                [SystemMessage(content=INTENT_SYSTEM_PROMPT), *history]
+            ),
+            timeout=ROUTER_TIMEOUT_SECONDS,
         )
     except Exception:
-        decision = None  # LLM 熔断：进入关键词规则兜底，严禁服务卡死
+        decision = None  # 超时 / 限流 / 异常：进入关键词规则兜底，严禁服务卡死
 
     if decision:
         intent = decision.intent
@@ -174,16 +192,30 @@ async def intent_router_node(state: GraphState):
 
 
 async def safety_qa_node(state: GraphState):
-    """安规问答节点：电力安规专家角色，基于多轮上下文流式解答用户问题"""
+    """安规问答节点：电力安规专家角色，基于多轮上下文以 astream 逐字流式解答"""
     history = state.get("messages", [])[-MAX_HISTORY_MESSAGES:]
+    messages = [SystemMessage(content=SAFETY_QA_SYSTEM_PROMPT), *history]
+
+    final_chunk = None
     try:
-        response = await llm.ainvoke([SystemMessage(content=SAFETY_QA_SYSTEM_PROMPT), *history])
+        # 显式 astream：逐 token 由外层 astream_events 实时转发，实现端到端打字机
+        async for chunk in llm.astream(messages):
+            final_chunk = chunk if final_chunk is None else final_chunk + chunk
     except Exception as exc:
         # 企业级容错降级：问答链路熔断不卡死，返回确定性提示
-        response = AIMessage(
-            content=f"【AI 服务熔断降级】安规专家服务暂时不可用（{exc}）。请稍后重试，或直接查阅《电力安全工作规程》对应章节。"
-        )
-    return {"messages": [response]}
+        return {
+            "messages": [
+                AIMessage(
+                    content=f"【AI 服务熔断降级】安规专家服务暂时不可用（{exc}）。"
+                    "请稍后重试，或直接查阅《电力安全工作规程》对应章节。"
+                )
+            ]
+        }
+
+    content = (getattr(final_chunk, "content", "") if final_chunk else "") or ""
+    if not str(content).strip():
+        content = "【AI 服务熔断降级】安规专家服务返回为空，请稍后重试。"
+    return {"messages": [AIMessage(content=content)]}
 
 
 async def safety_audit_node(state: GraphState):
@@ -220,10 +252,12 @@ async def safety_audit_node(state: GraphState):
         HumanMessage(content=human_prompt)
     ]
 
+    final_chunk = None
     try:
-        # 异步调用大模型进行研判推理
-        response = await llm.ainvoke(messages)
-        full_content = response.content
+        # 显式 astream 逐字研判：正文 token 实时流出（RISK 标记由网关过滤），拿到全文后再结构化解析
+        async for chunk in llm.astream(messages):
+            final_chunk = chunk if final_chunk is None else final_chunk + chunk
+        full_content = (getattr(final_chunk, "content", "") if final_chunk else "") or ""
 
         # 解析模型末尾的结构化判定
         if "RISK: HIGH" in full_content:
