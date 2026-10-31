@@ -232,10 +232,13 @@ async function sendMessage(text: string): Promise<void> {
   if (!content || streaming.value) return;
 
   const threadId = currentThreadId.value;
+  // 工单态封口：仅纯问答(QA)会话可发送自由文本，待审核/已办结会话只能卡片操作或开新会话
+  const session = sessions.value.find((s) => s.thread_id === threadId);
+  if (session && session.status !== 'QA') return;
+
   const isFirstMessage = (messagesMap.value[threadId] ?? []).length === 0;
-  if (isFirstMessage) {
-    const session = sessions.value.find((s) => s.thread_id === threadId);
-    if (session) session.title = deriveTitle(content);
+  if (isFirstMessage && session) {
+    session.title = deriveTitle(content);
   }
 
   appendMessage(threadId, {

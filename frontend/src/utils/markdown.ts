@@ -6,7 +6,7 @@
  * 输出为已清洗的安全 HTML 片段，可直接用于 v-html；流式场景每帧全量重算。
  */
 import MarkdownIt from 'markdown-it';
-import type { PluginSimple, RendererRule } from 'markdown-it';
+import type { RendererRule } from 'markdown-it';
 import * as markdownItKatexModule from '@vscode/markdown-it-katex';
 import hljs from 'highlight.js/lib/core';
 import DOMPurify from 'dompurify';
@@ -77,18 +77,21 @@ const md = new MarkdownIt({
  * 该插件为 CJS（module.exports = { default: fn }），不同打包器对 default 的
  * 互操作嵌套层级不一（Vite dev 可能为两层 .default），逐层解开取出函数本体。
  */
-function resolvePlugin(holder: unknown): PluginSimple {
+/** markdown-it 插件参数类型（取自实例 use 方法，规避类型版本 re-export 差异） */
+type MdPlugin = Parameters<typeof md.use>[0];
+
+function resolvePlugin(holder: unknown): MdPlugin {
   let cur: unknown = holder;
   for (let i = 0; i < 3 && cur && typeof cur === 'object'; i += 1) {
     if ('default' in cur) {
       const next = (cur as { default: unknown }).default;
-      if (typeof next === 'function') return next as PluginSimple;
+      if (typeof next === 'function') return next as MdPlugin;
       cur = next;
     } else {
       break;
     }
   }
-  if (typeof cur === 'function') return cur as PluginSimple;
+  if (typeof cur === 'function') return cur as MdPlugin;
   throw new Error('无法解析 markdown-it-katex 插件函数');
 }
 

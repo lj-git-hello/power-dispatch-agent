@@ -157,13 +157,19 @@
           }}
         </div>
 
+        <!-- 终态封口引导：工单已办结，引导开启新会话 -->
+        <div v-if="isTerminalSession" class="terminal-banner">
+          <span class="terminal-icon">✓</span>
+          本工单已办结，请点击左侧【＋ 发起新申报 / 问答】开启新会话。
+        </div>
+
         <!-- 快捷指令标签栏 -->
         <div class="quick-commands">
           <button
             v-for="cmd in QUICK_COMMANDS"
             :key="cmd"
             class="quick-chip"
-            :disabled="streaming"
+            :disabled="!isChatInputEnabled"
             @click="applyQuickCommand(cmd)"
           >
             {{ cmd }}
@@ -177,10 +183,14 @@
             v-model="inputText"
             rows="2"
             placeholder="输入安规问题或检修申报内容...（Enter 发送，Shift+Enter 换行）"
-            :disabled="streaming"
+            :disabled="!isChatInputEnabled"
             @keydown="onKeydown"
           ></textarea>
-          <button class="btn-send" :disabled="streaming || !inputText.trim()" @click="onSend">
+          <button
+            class="btn-send"
+            :disabled="!isChatInputEnabled || !inputText.trim()"
+            @click="onSend"
+          >
             <span v-if="streaming" class="spinner"></span>
             {{ streaming ? '流转中' : '发送' }}
           </button>
@@ -244,6 +254,18 @@ const isApprovalLocked = computed<boolean>(
   () =>
     streaming.value ||
     (currentSession.value?.status === 'PERMITTED' || currentSession.value?.status === 'REJECTED')
+);
+
+/** 工单是否已办结（终态）：用于输入区封口引导 */
+const isTerminalSession = computed<boolean>(
+  () =>
+    currentSession.value?.status === 'PERMITTED' ||
+    currentSession.value?.status === 'REJECTED'
+);
+
+/** 自由文本输入可用：仅纯问答(QA)会话且不在流式中；工单态（待审核/已办结）封口 */
+const isChatInputEnabled = computed<boolean>(
+  () => !streaming.value && (currentSession.value?.status ?? 'QA') === 'QA'
 );
 
 /** 消息流变化时平滑滚动触底 */
@@ -798,6 +820,33 @@ function formatTime(ts: number): string {
   border-radius: 8px;
   padding: 9px 14px;
   font-size: 12.5px;
+}
+
+/* 终态封口引导条（区别于琥珀色挂起条，使用品牌蓝中性提示） */
+.terminal-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-ring);
+  color: var(--primary-dark);
+  border-radius: 8px;
+  padding: 9px 14px;
+  font-size: 12.5px;
+}
+
+.terminal-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  flex-shrink: 0;
 }
 
 .quick-commands {
