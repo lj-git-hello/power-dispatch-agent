@@ -93,7 +93,7 @@
       </header>
 
       <!-- 消息与卡片流 -->
-      <section ref="streamRef" class="stream-area">
+      <section ref="streamRef" class="stream-area" @scroll="onStreamScroll">
         <div v-if="currentMessages.length === 0" class="empty-state">
           <div class="empty-icon">⚡</div>
           <p>暂无会话内容</p>
@@ -123,6 +123,11 @@
               ></span>
               <div v-if="!message.content && streaming && message === streamingTail" class="typing-dots">
                 <i></i><i></i><i></i>
+              </div>
+              <!-- 流式错误重试条 -->
+              <div v-if="message.error" class="retry-bar">
+                <span class="retry-text">⚠ {{ message.errorMessage ?? '流式通讯异常' }}</span>
+                <button type="button" class="retry-btn" @click="onRetry(message)">重试</button>
               </div>
             </div>
           </div>
@@ -230,6 +235,7 @@ const {
   awaitingApproval,
   createSession,
   switchSession,
+  retryMessage,
   sendMessage,
   sendCardAction,
 } = useWorkbench();
@@ -268,24 +274,52 @@ const isChatInputEnabled = computed<boolean>(
   () => !streaming.value && (currentSession.value?.status ?? 'QA') === 'QA'
 );
 
-/** 消息流变化时平滑滚动触底 */
-function scrollToBottom(): void {
+/** 距底小于该阈值视为“锚定触底”，新内容自动跟随（px） */
+const AUTO_SCROLL_THRESHOLD = 80;
+
+/** 用户是否锚定在底部（上翻历史则为 false，不强制回弹） */
+const pinnedToBottom = ref(true);
+
+/** 依据当前滚动位置更新锚定态 */
+function updatePinState(): void {
+  const el = streamRef.value;
+  if (!el) return;
+  pinnedToBottom.value =
+    el.scrollHeight - el.scrollTop - el.clientHeight < AUTO_SCROLL_THRESHOLD;
+}
+
+/** 消息区滚动事件 */
+function onStreamScroll(): void {
+  updatePinState();
+}
+
+/** 平滑锚定触底：nextTick + requestAnimationFrame 等待 DOM/帧绘制完成 */
+function scrollToBottom(smooth = true): void {
   nextTick(() => {
-    const el = streamRef.value;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    requestAnimationFrame(() => {
+      const el = streamRef.value;
+      if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+    });
   }).catch(() => {
     /* nextTick 中断可安全忽略 */
   });
 }
 
+/** Token/卡片增长：仅当用户锚定底部时跟随，上翻历史不回弹 */
+function followBottom(): void {
+  if (pinnedToBottom.value) scrollToBottom();
+}
+
 watch(
   () => currentMessages.value[currentMessages.value.length - 1],
-  () => scrollToBottom(),
+  () => followBottom(),
   { deep: true }
 );
 watch(currentThreadId, () => {
   inputText.value = '';
-  scrollToBottom();
+  // 切换会话强制锚定触底（hydrate 回填后跟随）
+  pinnedToBottom.value = true;
+  scrollToBottom(false);
 });
 
 /** Enter 发送 / Shift+Enter 换行 */
@@ -312,6 +346,11 @@ async function onSend(): Promise<void> {
 /** 调度长核签动作：组装 action_payload 唤醒状态机恢复 */
 async function onApprovalAction(payload: { is_permitted: boolean; reason: string }): Promise<void> {
   await sendCardAction(payload);
+}
+
+/** 重试失败气泡 */
+async function onRetry(message: ChatMessage): Promise<void> {
+  await retryMessage(currentThreadId.value, message.id);
 }
 
 /** 时间格式化（会话列表展示） */
@@ -744,6 +783,42 @@ function formatTime(ts: number): string {
   border: none;
   border-top: 1px dashed var(--border-strong);
   margin: 10px 0;
+}
+
+/* 流式错误重试条（气泡内醒目内嵌） */
+.retry-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid rgba(220, 38, 38, 0.4);
+  background: rgba(220, 38, 38, 0.08);
+  border-radius: 6px;
+}
+
+.retry-text {
+  font-size: 12px;
+  color: var(--status-rejected-text);
+  word-break: break-word;
+}
+
+.retry-btn {
+  flex-shrink: 0;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--primary);
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.retry-btn:hover {
+  opacity: 0.88;
 }
 
 /* 打字机光标 */

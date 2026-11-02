@@ -160,3 +160,46 @@ export async function streamChatAgent(
     if (!completed) callbacks.onError(errorMsg);
   }
 }
+
+// ============================================================
+// 会话快照回填（第四阶段 Hydration）严格类型
+// ============================================================
+
+/** 快照中的历史消息条目 */
+export interface ThreadStateMessage {
+  role: 'user' | 'agent';
+  content: string;
+}
+
+/** 快照中的工单业务数据 */
+export interface ThreadStateSnapshot {
+  intent: string | null;
+  plan_id: string | null;
+  substation_name: string | null;
+  voltage_level: string | null;
+  risk_level: string | null;
+  status: string | null;
+  permit_no: string | null;
+  audit_report: string | null;
+}
+
+/** GET /api/v1/agent/state/{thread_id} 响应契约 */
+export interface ThreadStateResponse {
+  thread_id: string;
+  messages: ThreadStateMessage[];
+  is_suspended: boolean;
+  next: string[];
+  state: ThreadStateSnapshot;
+}
+
+/** 拉取会话只读快照（失败上抛，由调用方走本地兜底） */
+export async function fetchThreadState(threadId: string): Promise<ThreadStateResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/agent/state/${encodeURIComponent(threadId)}`,
+    { method: 'GET', headers: { Accept: 'application/json' } }
+  );
+  if (!response.ok) {
+    throw new Error(`快照读取失败：HTTP ${response.status}`);
+  }
+  return (await response.json()) as ThreadStateResponse;
+}

@@ -1,11 +1,13 @@
 import { computed, ref, watch } from 'vue';
 import {
+  fetchThreadState,
   streamChatAgent,
   type A2UICard,
   type AgentChatRequest,
   type ApprovalCardData,
   type PermitResultCardData,
   type RoleType,
+  type ThreadStateResponse,
 } from '@/api/agent';
 
 // ============================================================
@@ -27,6 +29,10 @@ export interface ChatMessage {
   content: string;
   /** 挂载卡片（kind === 'card'） */
   card?: A2UICard;
+  /** 该气泡是否处于流式错误态（渲染错误重试条） */
+  error?: boolean;
+  /** 错误详情文案 */
+  errorMessage?: string;
 }
 
 /** 会话档案 */
@@ -52,6 +58,17 @@ export const SESSION_STATUS_LABELS: Record<SessionStatus, string> = {
 };
 
 const STORAGE_KEY = 'power_dispatch_workbench_v1';
+
+/** 断点恢复时后端注入的内部 HumanMessage 前缀（非用户真实输入，回填需过滤） */
+const INTERNAL_HUMAN_PREFIXES = [
+  '调度值班长核准开工申请',
+  '调度值班长驳回本次检修申请',
+] as const;
+
+/** 判断一条 user 文本是否为内部注入语（hydrate 时不当作用户气泡） */
+function isInternalHumanText(content: string): boolean {
+  return INTERNAL_HUMAN_PREFIXES.some((prefix) => content.startsWith(prefix));
+}
 
 function generateMessageId(): string {
   return `msg_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
@@ -163,10 +180,11 @@ function createSession(): void {
   currentThreadId.value = threadId;
 }
 
-/** 切换会话 */
+/** 切换会话：切换后从后端快照权威回填（失败保留本地存档） */
 function switchSession(threadId: string): void {
   if (streaming.value) return; // 流式执行中禁止切换，防止状态错乱
   currentThreadId.value = threadId;
+  void hydrateThread(threadId);
 }
 
 /** 依据卡片事件驱动会话业务状态 */
@@ -178,6 +196,69 @@ function applyCardToSession(threadId: string, card: A2UICard): void {
     if (status === 'PERMITTED') setSessionStatus(threadId, 'PERMITTED');
     else if (status === 'REJECTED') setSessionStatus(threadId, 'REJECTED');
   }
+}
+
+/** 依据后端快照确定性重建消息流与卡片（稳定 id，幂等不抖动） */
+async function hydrateThread(threadId: string): Promise<void> {
+  let snapshot: ThreadStateResponse;
+  try {
+    snapshot = await fetchThreadState(threadId);
+  } catch {
+    // 离线 / 网关不可达：保留现有 localStorage 消息，不强制空白
+    return;
+  }
+
+  const { state } = snapshot;
+  const rebuilt: ChatMessage[] = [];
+  let seq = 0;
+  const nextId = (): string => {
+    const id = `hyd_${threadId}_${seq}`;
+    seq += 1;
+    return id;
+  };
+
+  for (const msg of snapshot.messages) {
+    // 过滤断点恢复时后端注入的内部 HumanMessage
+    if (msg.role === 'user' && isInternalHumanText(msg.content)) continue;
+    rebuilt.push({ id: nextId(), role: msg.role, kind: 'text', content: msg.content });
+  }
+
+  if (snapshot.is_suspended) {
+    // 挂起中：挂载核签卡（角色决定按钮可否操作）
+    const card: A2UICard = {
+      card_type: 'APPROVAL_ACTION',
+      data: {
+        plan_id: state.plan_id,
+        voltage_level: state.voltage_level,
+        audit_report: state.audit_report,
+        risk_level: state.risk_level,
+      },
+    };
+    rebuilt.push({ id: nextId(), role: 'agent', kind: 'card', content: '', card });
+  } else if (state.status === 'PERMITTED' && state.permit_no) {
+    const card: A2UICard = {
+      card_type: 'PERMIT_RESULT',
+      data: { plan_id: state.plan_id, permit_no: state.permit_no, status: state.status },
+    };
+    rebuilt.push({ id: nextId(), role: 'agent', kind: 'card', content: '', card });
+  } else if (state.status === 'REJECTED') {
+    // 驳回同样以 PERMIT_RESULT 卡承载（组件自带驳回票据样式）
+    const card: A2UICard = {
+      card_type: 'PERMIT_RESULT',
+      data: { plan_id: state.plan_id, permit_no: state.permit_no, status: state.status },
+    };
+    rebuilt.push({ id: nextId(), role: 'agent', kind: 'card', content: '', card });
+  }
+
+  // 仅当快照确实带回内容才覆盖，避免清空本地更完整的记录
+  if (rebuilt.length > 0) {
+    messagesMap.value[threadId] = rebuilt;
+  }
+
+  // 同步会话业务状态（与挂起/终态一一对应）
+  if (snapshot.is_suspended) setSessionStatus(threadId, 'WAITING');
+  else if (state.status === 'PERMITTED') setSessionStatus(threadId, 'PERMITTED');
+  else if (state.status === 'REJECTED') setSessionStatus(threadId, 'REJECTED');
 }
 
 /**
@@ -208,13 +289,15 @@ async function dispatchStream(request: AgentChatRequest, agentMessageId: string)
         });
       },
       onError: (errorMsg) => {
+        // 就地标记当前占位气泡为错误态（气泡内渲染重试条），不再追加额外消息
         lastError.value = errorMsg;
-        appendMessage(request.thread_id, {
-          id: generateMessageId(),
-          role: 'agent',
-          kind: 'text',
-          content: `【网关异常】${errorMsg}`,
-        });
+        const list = messagesMap.value[request.thread_id] ?? [];
+        const idx = list.findIndex((m) => m.id === agentMessageId);
+        if (idx >= 0) {
+          const next = [...list];
+          next[idx] = { ...next[idx], error: true, errorMessage: errorMsg };
+          messagesMap.value[request.thread_id] = next;
+        }
       },
       onDone: () => {
         /* 收口由 streaming 状态复位处理 */
@@ -288,6 +371,35 @@ async function sendCardAction(payload: { is_permitted: boolean; reason: string }
   );
 }
 
+/** 重试失败气泡：依据其前一条用户真实输入重新发起流式请求 */
+async function retryMessage(threadId: string, failedMessageId: string): Promise<void> {
+  if (streaming.value) return;
+  const list = messagesMap.value[threadId] ?? [];
+  const idx = list.findIndex((m) => m.id === failedMessageId);
+  if (idx < 0) return;
+
+  // 取失败气泡之前最近一条用户文本作为重发内容
+  let userText = '';
+  for (let i = idx - 1; i >= 0; i -= 1) {
+    const m = list[i];
+    if (m.role === 'user' && m.kind === 'text' && m.content.trim()) {
+      userText = m.content;
+      break;
+    }
+  }
+  if (!userText) return;
+
+  // 重置失败气泡为空占位并清除错误态（复用同一消息 id 接收新 token）
+  const next = [...list];
+  next[idx] = { ...next[idx], content: '', error: false, errorMessage: '' };
+  messagesMap.value[threadId] = next;
+
+  await dispatchStream(
+    { thread_id: threadId, message: userText, role: currentRole.value },
+    failedMessageId
+  );
+}
+
 /** 卡片载荷收窄工具：供视图层使用 */
 export function asApprovalCardData(card: A2UICard): ApprovalCardData {
   const data = card.data;
@@ -320,6 +432,8 @@ export function useWorkbench() {
     awaitingApproval,
     createSession,
     switchSession,
+    hydrateThread,
+    retryMessage,
     sendMessage,
     sendCardAction,
   };
