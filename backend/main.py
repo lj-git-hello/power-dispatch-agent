@@ -2,7 +2,7 @@ import os
 import json
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -204,6 +204,49 @@ async def agent_chat_stream(req: AgentChatRequest):
 async def health_check():
     """健康检查：网关存活与状态机挂载状态"""
     return {"code": 200, "status": "ok", "graph_ready": graph_app is not None}
+
+
+@app.get("/api/v1/agent/state/{thread_id}")
+async def get_agent_state(thread_id: str):
+    """只读快照：回填会话消息历史、挂起状态与已有工单数据（供前端切换/刷新 Hydration）"""
+    if graph_app is None:
+        # 网关尚未完成状态机挂载
+        raise HTTPException(status_code=503, detail="状态机尚未就绪，请稍后重试。")
+
+    config = {"configurable": {"thread_id": thread_id}}
+    snapshot = await graph_app.aget_state(config)
+
+    # 序列化消息：仅取字符串正文，过滤空内容；human/ai 映射为 user/agent
+    messages = []
+    for msg in (snapshot.values or {}).get("messages") or []:
+        content = getattr(msg, "content", "")
+        if isinstance(content, str) and content.strip():
+            role = "user" if getattr(msg, "type", "") == "human" else "agent"
+            messages.append({"role": role, "content": content})
+
+    values = snapshot.values or {}
+
+    def _text(key):
+        value = values.get(key)
+        return value if isinstance(value, str) and value else None
+
+    return {
+        "thread_id": thread_id,
+        "messages": messages,
+        # 挂起判定：下一待执行节点含人工核签闸口
+        "is_suspended": "dispatcher_approval" in (snapshot.next or ()),
+        "next": list(snapshot.next or ()),
+        "state": {
+            "intent": _text("intent"),
+            "plan_id": _text("plan_id"),
+            "substation_name": _text("substation_name"),
+            "voltage_level": _text("voltage_level"),
+            "risk_level": _text("risk_level"),
+            "status": _text("status"),
+            "permit_no": _text("permit_no"),
+            "audit_report": _text("audit_report"),
+        },
+    }
 
 
 @app.post("/api/v1/agent/chat-stream")
