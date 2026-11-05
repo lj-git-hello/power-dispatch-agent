@@ -1,11 +1,18 @@
 import os
+import sys
 import json
+import asyncio
 from contextlib import asynccontextmanager
+
+# Windows 兼容：psycopg 在默认 ProactorEventLoop 下会抛 NotImplementedError，
+# 必须在事件循环创建前切换为 SelectorEventLoop
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langchain_core.messages import HumanMessage
 
 # 加载 .env 环境变量
@@ -17,6 +24,7 @@ from app.agent.graph import (
     INTENT_ROUTER_TAG,
     SUBMIT_CHANNEL_PLAN_FIELDS,
 )
+from app.core.database import async_engine, checkpointer_manager
 from app.schemas.dispatch import (
     PlanApplyRequest,
     PermitRequest,
@@ -30,16 +38,20 @@ from app.schemas.dispatch import (
     DISPATCHER_DECISION_ALIASES,
 )
 
-DB_PATH = "power_dispatch.db"
 graph_app = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global graph_app
-    async with AsyncSqliteSaver.from_conn_string(DB_PATH) as checkpointer:
-        graph_app = create_dispatch_graph(checkpointer)
-        print("[企业生产级中枢就绪] 双模状态机已挂载 + SQLite Checkpointer 启动")
-        yield
+    # 启动阶段：初始化 LangGraph 专属连接池并执行幂等建表
+    await checkpointer_manager.init_pool()
+    graph_app = create_dispatch_graph(checkpointer_manager.saver)
+    print("[企业生产级中枢就绪] 双模状态机已挂载 + Postgres Checkpointer 连接池已就绪")
+    yield
+    # 退出阶段：先关检查点池，再释放业务引擎连接，优雅回收全部连接
+    await checkpointer_manager.close_pool()
+    await async_engine.dispose()
+    print("[中枢已关停] Checkpointer 连接池与业务引擎连接均已释放")
 
 app = FastAPI(title="智能电网检修调度协同中枢", lifespan=lifespan)
 
