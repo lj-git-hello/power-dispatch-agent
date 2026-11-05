@@ -1,17 +1,30 @@
 version: '3.8'
 
 services:
-  postgres:
+  ai-postgres:
     image: pgvector/pgvector:pg16
-    container_name: power_pg
+    container_name: power_ai_postgres
+    restart: always
     environment:
-      POSTGRES_USER: power_admin
-      POSTGRES_PASSWORD: power_password_2026
-      POSTGRES_DB: power_dispatch_db
+      POSTGRES_DB: power_dispatch_ai
+      POSTGRES_USER: ai_admin
+      POSTGRES_PASSWORD: ai_secure_password_2026
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ai_pg_data:/var/lib/postgresql/data
+      - ./backend/scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    command: >
+      postgres 
+      -c max_connections=200 
+      -c shared_buffers=512MB 
+      -c work_mem=32MB 
+      -c maintenance_work_mem=128MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai_admin -d power_dispatch_ai"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
-  pgdata:
+  ai_pg_data:

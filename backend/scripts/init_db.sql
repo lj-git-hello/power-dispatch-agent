@@ -1,0 +1,4 @@
+-- 开启向量检索扩展
+CREATE EXTENSION IF NOT EXISTS vector;
+-- 开启 UUID 生成扩展
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
