@@ -25,6 +25,8 @@ from app.agent.graph import (
     SUBMIT_CHANNEL_PLAN_FIELDS,
 )
 from app.core.database import async_engine, checkpointer_manager
+from app.api.v1.auth import router as auth_router
+from app.api.v1.power_dispatch import router as power_dispatch_router
 from app.schemas.dispatch import (
     PlanApplyRequest,
     PermitRequest,
@@ -43,8 +45,10 @@ graph_app = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global graph_app
-    # 启动阶段：初始化 LangGraph 专属连接池并执行幂等建表
+    # 启动阶段：初始化 LangGraph 专属连接池并执行幂等建表（含 saver.setup()）
     await checkpointer_manager.init_pool()
+    # 通用底座：将 checkpointer 暴露到 app.state，供后续模块化依赖注入取用
+    app.state.checkpointer = checkpointer_manager.saver
     graph_app = create_dispatch_graph(checkpointer_manager.saver)
     print("[企业生产级中枢就绪] 双模状态机已挂载 + Postgres Checkpointer 连接池已就绪")
     yield
@@ -62,6 +66,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ============================================================
+# 模块化路由装配：系统通用能力 + 电力垂直业务（业务端点不在 main 内实现）
+# ============================================================
+app.include_router(auth_router, prefix="/api/v1")
+app.include_router(power_dispatch_router, prefix="/api/v1")
 
 
 def _sse(event_type: SSEEventType, data: dict) -> str:
