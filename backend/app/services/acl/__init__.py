@@ -12,6 +12,11 @@ from app.services.acl.iam_adapter import (
     verify_access_token,
 )
 from app.services.acl.oms_adapter import OMSGatewayAdapter
+from app.services.acl.protocols import (
+    IAMAdapterProtocol,
+    OMSGatewayAdapterProtocol,
+    SCADAGatewayAdapterProtocol,
+)
 from app.services.acl.scada_adapter import SCADAGatewayAdapter
 
 __all__ = [
@@ -20,4 +25,7 @@ __all__ = [
     "verify_access_token",
     "OMSGatewayAdapter",
     "SCADAGatewayAdapter",
+    "IAMAdapterProtocol",
+    "OMSGatewayAdapterProtocol",
+    "SCADAGatewayAdapterProtocol",
 ]
