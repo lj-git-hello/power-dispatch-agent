@@ -1,0 +1,23 @@
+# =============================================================================
+# power-dispatch-agent 开发 / 测试专用锁版依赖
+#
+# 用途：本地开发、pytest 异步单测；不进入生产镜像。
+# 安装：pip install -r requirements-dev.txt
+#   （首行自动继承生产锁版清单 requirements.txt）
+#
+# 与 requirements.txt 的关系：
+#   requirements.txt      生产运行时依赖（容器化部署用）
+#   requirements-dev.txt  开发/测试工具链（本文件）
+# =============================================================================
+
+-r requirements.txt
+
+# ---- 测试框架（pytest + pytest-asyncio 异步支持） ----
+pytest==9.2.0
+pytest-asyncio==1.4.1.post1
+
+# ---- 上述测试框架的传递依赖，显式锁版以保证可复现 ----
+pluggy==1.7.0
+iniconfig==2.3.1
+colorama==0.4.6
+pygments==2.21.0
