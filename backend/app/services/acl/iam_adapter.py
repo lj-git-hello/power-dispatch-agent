@@ -2,7 +2,11 @@
 
 当前为 Mock 实现：预置企业账号，下发 / 校验本地 JWT。
 后续替换为对接企业 IAM / 统一权限平台时，仅需替换本文件内部实现，
-对外保持 create_access_token / verify_access_token 签名不变。
+对外保持 IAMGatewayAdapter 的静态方法签名不变。
+
+形态与 OMSGatewayAdapter / SCADAGatewayAdapter 对齐：无状态静态网关。
+模块级 create_access_token / verify_access_token 为向后兼容别名，
+旧脚本与测试无需改动。
 
 安全约束：签名私钥仅从环境变量 JWT_SECRET_KEY 读取，严禁硬编码。
 """
@@ -64,36 +68,51 @@ def _get_secret_key() -> str:
     return secret
 
 
-def create_access_token(user_id: str) -> str:
-    """为预置账号下发 12 小时有效期的标准 JWT。
+class IAMGatewayAdapter:
+    """统一身份认证网关防腐适配器（Mock 实现，无状态静态网关）。"""
 
-    Claims：sub(user_id)、name、role、dept、iat、exp。
-    未知 user_id 抛出 KeyError。
-    """
-    user = MOCK_USERS[user_id]
+    @staticmethod
+    def create_access_token(user_id: str) -> str:
+        """为预置账号下发 12 小时有效期的标准 JWT。
 
-    now = datetime.now(timezone.utc)
-    payload: dict[str, Any] = {
-        CLAIM_SUBJECT: user["user_id"],
-        CLAIM_NAME: user["name"],
-        CLAIM_ROLE: user["role"],
-        CLAIM_DEPT: user["dept"],
-        CLAIM_ISSUED_AT: now,
-        CLAIM_EXPIRES_AT: now + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS),
-    }
+        Claims：sub(user_id)、name、role、dept、iat、exp。
+        未知 user_id 抛出 KeyError。
+        """
+        user = MOCK_USERS[user_id]
 
-    return jwt.encode(payload, _get_secret_key(), algorithm=JWT_ALGORITHM)
+        now = datetime.now(timezone.utc)
+        payload: dict[str, Any] = {
+            CLAIM_SUBJECT: user["user_id"],
+            CLAIM_NAME: user["name"],
+            CLAIM_ROLE: user["role"],
+            CLAIM_DEPT: user["dept"],
+            CLAIM_ISSUED_AT: now,
+            CLAIM_EXPIRES_AT: now
+            + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS),
+        }
+
+        return jwt.encode(payload, _get_secret_key(), algorithm=JWT_ALGORITHM)
+
+    @staticmethod
+    def verify_token(token: str) -> dict[str, Any]:
+        """解码并校验 JWT 签名与有效期。
+
+        成功返回声明字典；过期抛出 jwt.ExpiredSignatureError，
+        签名非法 / 格式错误抛出 jwt.InvalidTokenError。
+        """
+        return jwt.decode(
+            token,
+            _get_secret_key(),
+            algorithms=[JWT_ALGORITHM],
+            options={"require": [CLAIM_SUBJECT, CLAIM_EXPIRES_AT]},
+        )
+
+    @staticmethod
+    def verify_access_token(token: str) -> dict[str, Any]:
+        """verify_token 的向后兼容别名。"""
+        return IAMGatewayAdapter.verify_token(token)
 
 
-def verify_access_token(token: str) -> dict[str, Any]:
-    """解码并校验 JWT 签名与有效期。
-
-    成功返回声明字典；过期抛出 jwt.ExpiredSignatureError，
-    签名非法 / 格式错误抛出 jwt.InvalidTokenError。
-    """
-    return jwt.decode(
-        token,
-        _get_secret_key(),
-        algorithms=[JWT_ALGORITHM],
-        options={"require": [CLAIM_SUBJECT, CLAIM_EXPIRES_AT]},
-    )
+# ---- 模块级向后兼容别名：旧脚本 / 旧测试可继续按函数方式导入调用 ----
+create_access_token = IAMGatewayAdapter.create_access_token
+verify_access_token = IAMGatewayAdapter.verify_access_token

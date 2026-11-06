@@ -8,6 +8,7 @@
 
 from app.services.acl.iam_adapter import (
     MOCK_USERS,
+    IAMGatewayAdapter,
     create_access_token,
     verify_access_token,
 )
@@ -21,6 +22,7 @@ from app.services.acl.scada_adapter import SCADAGatewayAdapter
 
 __all__ = [
     "MOCK_USERS",
+    "IAMGatewayAdapter",
     "create_access_token",
     "verify_access_token",
     "OMSGatewayAdapter",
