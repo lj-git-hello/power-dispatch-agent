@@ -23,9 +23,14 @@ DEFAULT_INITIAL_STATUS = "RECEIVED"
 
 
 class OMSGatewayAdapter:
-    """企业 OMS 网关防腐适配器（Mock 实现）。"""
+    """企业 OMS 网关防腐适配器（Mock 实现）。
 
-    def create_official_order(self, draft_data: dict[str, Any], creator_id: str) -> str:
+    方法统一为 ``@staticmethod`` + ``async``：与真实外部微服务调用契约一致，
+    无状态、静态网关；后续替换为真实 HTTP 客户端时仅改实现，签名不变。
+    """
+
+    @staticmethod
+    async def create_official_order(draft_data: dict[str, Any], creator_id: str) -> str:
         """模拟 OMS 正式工单建档，返回原子自增格式工单号。
 
         格式：OMS-YYYYMMDD-六位随机数，如 OMS-20261106-048213。
@@ -45,8 +50,8 @@ class OMSGatewayAdapter:
         )
         return biz_order_id
 
-    def update_order_status(
-        self,
+    @staticmethod
+    async def update_order_status(
         biz_order_id: str,
         new_status: str,
         audit_opinion: str | None = None,

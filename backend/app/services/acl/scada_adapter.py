@@ -25,10 +25,15 @@ SIGNATURE_SEPARATOR = "|"
 
 
 class SCADAGatewayAdapter:
-    """调度自动化网关防腐适配器（Mock 实现）。"""
+    """调度自动化网关防腐适配器（Mock 实现）。
 
-    def issue_dispatch_permit(
-        self, biz_order_id: str, reviewer_id: str
+    方法统一为 ``@staticmethod`` + ``async``：与真实外部微服务调用契约一致，
+    无状态、静态网关；后续替换为真实 SCADA 主站接口时仅改实现，签名不变。
+    """
+
+    @staticmethod
+    async def issue_dispatch_permit(
+        biz_order_id: str, reviewer_id: str
     ) -> dict[str, Any]:
         """模拟签发电网调度许可令。
 
