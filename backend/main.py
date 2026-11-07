@@ -27,6 +27,7 @@ from app.agent.graph import (
 from app.core.database import async_engine, checkpointer_manager
 from app.api.v1.auth import router as auth_router
 from app.api.v1.power_dispatch import router as power_dispatch_router
+from app.api.v1.knowledge import knowledge_router
 from app.schemas.dispatch import (
     PlanApplyRequest,
     PermitRequest,
@@ -72,6 +73,7 @@ app.add_middleware(
 # ============================================================
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(power_dispatch_router, prefix="/api/v1")
+app.include_router(knowledge_router, prefix="/api/v1")
 
 
 def _sse(event_type: SSEEventType, data: dict) -> str:
