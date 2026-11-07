@@ -191,7 +191,7 @@ class AIKnowledgeBase(Base):
     biz_tag: Mapped[str] = mapped_column(String(32), nullable=False)
     section_title: Mapped[str | None] = mapped_column(String(128), nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[list[float]] = mapped_column(Vector(1536), nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
     is_active: Mapped[bool] = mapped_column(
         Boolean, server_default=text("true"), default=True, nullable=False
     )
