@@ -25,13 +25,16 @@ from fastapi.middleware.cors import CORSMiddleware
 # 加载 backend/.env
 load_dotenv()
 
-from app.agent.graph import create_dispatch_graph
 from app.core.database import async_engine, checkpointer_manager
+from app.core.workflow import DEFAULT_GRAPH_NAME, GraphRegistry
 from app.api.v1.auth import router as auth_router
-from app.api.v1.power_dispatch import router as power_dispatch_router
 from app.api.v1.knowledge import knowledge_router
+from app.plugins.power_grid.graph import build_dispatch_graph
+from app.plugins.power_grid.router import (
+    power_dispatch_router,
+)
 
-# 全局状态机实例（lifespan 中构建，绑定 Postgres checkpointer）
+# 全局状态机实例（lifespan 中构建并注册，绑定 Postgres checkpointer）
 graph_app = None
 
 
@@ -41,8 +44,10 @@ async def lifespan(app: FastAPI):
     # 启动：LangGraph 专属连接池 + 幂等建表（含 saver.setup()）
     await checkpointer_manager.init_pool()
     app.state.checkpointer = checkpointer_manager.saver
-    graph_app = create_dispatch_graph(checkpointer_manager.saver)
-    print("[中枢就绪] 检修调度状态机已挂载 + Postgres Checkpointer 连接池就绪")
+    # 构建电网插件图，并通过注册中心对通用底座暴露（依赖反转）
+    graph_app = build_dispatch_graph(checkpointer_manager.saver)
+    GraphRegistry.register_graph(DEFAULT_GRAPH_NAME, graph_app)
+    print("[中枢就绪] 电网插件状态机已挂载并注册 + Checkpointer 连接池就绪")
     yield
     # 退出：先关检查点池，再释放业务引擎
     graph_app = None
@@ -66,7 +71,9 @@ app.add_middleware(
 
 # 模块化路由装配
 app.include_router(auth_router, prefix="/api/v1")
-app.include_router(power_dispatch_router, prefix="/api/v1")
+app.include_router(
+    power_dispatch_router, prefix="/api/v1/power-dispatch"
+)
 app.include_router(knowledge_router, prefix="/api/v1")
 
 
