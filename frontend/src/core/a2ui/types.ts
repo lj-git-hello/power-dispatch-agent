@@ -32,3 +32,25 @@ export interface CardComponentProps {
   message: ChatMessageRecord
   actionContext: CardActionContext
 }
+
+/**
+ * ResumeActionContext —— CAS 恢复动作上下文。
+ * 提交给工作流恢复端点，用于乐观锁版本校验。
+ */
+export interface ResumeActionContext {
+  thread_id: string
+  lock_version: number
+  action: string
+  payload: Record<string, unknown> | null
+}
+
+/** 任务 / 会话摘要：列表与看板使用的通用结构 */
+export interface TaskSummary {
+  thread_id: string
+  session_id: string
+  creator_id: string
+  assigned_role: string
+  status: string
+  lock_version: number
+  current_node: string | null
+}
