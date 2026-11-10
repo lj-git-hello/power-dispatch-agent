@@ -18,12 +18,21 @@ import {
 import TaskApprovalPool from './TaskApprovalPool.vue'
 import TaskHistoryList from './TaskHistoryList.vue'
 import type { WorkflowEndpoints } from '../a2ui/types'
+import { http } from '../api/http'
 import { clearSession, loadMessages } from '../engine/storage'
+import {
+  type ApplyResult,
+  useWorkbenchStore,
+} from '../workbench/useWorkbenchStore'
 
 // 端点配置由业务插件经宿主注入；缺省时子视图使用各自通用占位路径
 const props = defineProps<{
   endpoints?: WorkflowEndpoints
 }>()
+
+// 通用工作台共享状态
+const workbench = useWorkbenchStore()
+const { state: workbenchState } = workbench
 
 type IdentityId = 'applicant_01' | 'dispatcher_lead'
 interface Identity {
@@ -43,10 +52,21 @@ const currentIdentity = computed(
   () => IDENTITIES.find((item) => item.id === identityId.value)!,
 )
 
-function switchIdentity(event: Event) {
+// 调后端登录端点换取真实 JWT（后端只认合规 JWT，不能写 simulated:*）
+async function loginAs(userId: IdentityId) {
+  const { data } = await http.post<{ access_token: string }>('/v1/auth/login', {
+    user_id: userId,
+  })
+  localStorage.setItem('auth_token', data.access_token)
+}
+
+async function switchIdentity(event: Event) {
   identityId.value = (event.target as HTMLSelectElement).value as IdentityId
-  // 仅本地演示：写入模拟标识（真实 JWT 由后端登录签发）
-  localStorage.setItem('auth_token', `simulated:${identityId.value}`)
+  try {
+    await loginAs(identityId.value)
+  } catch (error) {
+    console.error('身份切换失败：', error)
+  }
 }
 
 // ---- SSE 灯状态（默认离线；实际由后续接入的 SSEClient onStatus 更新） ----
@@ -57,19 +77,27 @@ const sseMeta = {
   offline: { dot: 'bg-gray-400', text: 'Offline' },
 } as const
 
-// ---- 当前会话 ----
+// ---- 当前会话（ID 与消息由共享 store 持有） ----
 function newSessionId(): string {
   return crypto.randomUUID()
 }
-const sessionId = ref<string>(newSessionId())
+// 初始化一个本地会话（延迟落库，不发请求）
+workbench.setSession(newSessionId())
+const sessionId = computed(() => workbenchState.activeSessionId)
+
 const activeTab = ref<'history' | 'approval'>('history')
 const draftText = ref('')
 const storageHealthy = ref(true)
 
 function createNewSession() {
-  // 延迟落库：仅本地重置，不发请求
-  sessionId.value = newSessionId()
+  // 延迟落库：仅本地重置会话与消息，不发请求
+  workbench.setSession(newSessionId())
   draftText.value = ''
+}
+
+/** 表单提交成功后的统一收口（供 App 经组件 ref 调用）。 */
+function handleApplied(result: ApplyResult) {
+  workbench.applyResult(result)
 }
 
 async function checkStorage() {
@@ -86,16 +114,25 @@ async function wipeLocalSnapshot() {
   storageHealthy.value = true
 }
 
-// ---- 右栏折叠 ----
-const rightOpen = ref(true)
+// 右栏开合由 store 统一持有（提交成功后自动折叠）
+const rightOpen = computed(() => workbenchState.rightDrawerOpen)
 
 function sendDraft() {
   // 本步仅占位：通用发送逻辑后续接入
   draftText.value = ''
 }
 
+// 暴露给装配层（App）调用
+defineExpose({ handleApplied })
+
 // 挂载时探测 IndexedDB 健康度
-onMounted(checkStorage)
+onMounted(async () => {
+  // 启动时为当前身份确保一个有效 JWT（旧 simulated:* / 空值会被覆盖）
+  await loginAs(identityId.value).catch((error) =>
+    console.error('启动登录失败：', error),
+  )
+  await checkStorage()
+})
 </script>
 
 <template>
@@ -210,6 +247,7 @@ onMounted(checkStorage)
             v-if="activeTab === 'history'"
             :session-id="sessionId"
             :current-user-id="currentIdentity.id"
+            :messages="workbenchState.activeMessages"
           />
           <TaskApprovalPool
             v-else
@@ -257,7 +295,7 @@ onMounted(checkStorage)
             <button
               type="button"
               class="text-xs text-gray-500"
-              @click="rightOpen = false"
+              @click="workbench.setRightDrawer(false)"
             >
               收起
             </button>
@@ -285,7 +323,7 @@ onMounted(checkStorage)
           v-if="!rightOpen"
           type="button"
           class="absolute"
-          @click="rightOpen = true"
+          @click="workbench.setRightDrawer(true)"
         >
           ›
         </button>

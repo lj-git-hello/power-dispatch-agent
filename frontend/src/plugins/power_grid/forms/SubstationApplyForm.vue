@@ -13,8 +13,15 @@ const props = defineProps<{
   sessionId: string
 }>()
 
+/** apply 成功返回的完整载荷 */
+interface ApplyResult {
+  thread_id: string
+  status: string
+  card: Record<string, unknown>
+}
+
 const emit = defineEmits<{
-  submitted: [threadId: string]
+  submitted: [result: ApplyResult]
 }>()
 
 // 可选安全措施（勾选）
@@ -43,7 +50,7 @@ async function submit() {
   errorMessage.value = null
 
   try {
-    const { data } = await http.post<{ thread_id: string }>(
+    const { data } = await http.post<ApplyResult>(
       '/v1/power-dispatch/apply',
       {
         session_id: props.sessionId,
@@ -53,7 +60,8 @@ async function submit() {
         safety_measures: selectedMeasureTexts(),
       },
     )
-    emit('submitted', data.thread_id)
+    // 回传完整响应（含 card 快照），交由工作台收口联动
+    emit('submitted', data)
   } catch (error) {
     errorMessage.value = (error as { message?: string }).message ?? '提交失败'
   } finally {

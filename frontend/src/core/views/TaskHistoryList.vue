@@ -2,10 +2,10 @@
 /**
  * TaskHistoryList —— 提报员历史时间线（通用）。
  *
- * 加载时从 IndexedDB 读取离线历史；文本渲染气泡，卡片经 MessageCardHost；
- * 消息变更时防抖持久化。
+ * 渲染源由外部（工作台 store）经 props.messages 传入；挂载时从 IndexedDB
+ * 离线恢复，文本渲染气泡，卡片经 MessageCardHost；消息变更防抖持久化。
  */
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, watch } from 'vue'
 
 import MessageCardHost from '../a2ui/MessageCardHost.vue'
 import type { CardActionContext, ChatMessageRecord } from '../a2ui/types'
@@ -18,11 +18,11 @@ import { renderMarkdown } from '@/utils/markdown'
 const props = defineProps<{
   sessionId: string
   currentUserId: string
+  /** 外部响应式消息列表（store 持有） */
+  messages: ChatMessageRecord[]
 }>()
 
-const messages = ref<ChatMessageRecord[]>([])
-
-// 卡片动作上下文（本视图内 dispatch 仅占位，业务动作由后续注入）
+// 卡片动作上下文（dispatch 占位，业务动作后续注入）
 function makeActionContext(message: ChatMessageRecord): CardActionContext {
   return {
     threadId: message.thread_id,
@@ -37,20 +37,17 @@ function textHtml(message: ChatMessageRecord): string {
 
 async function hydrate() {
   const stored = await loadMessages<ChatMessageRecord[]>(props.sessionId)
-  if (stored) messages.value = stored
+  if (stored) props.messages.splice(0, props.messages.length, ...stored)
 }
 
-// 变更防抖落盘（深度监听）
+// 外部数组变更（含 push 卡片）→ 防抖落盘
 watch(
-  messages,
+  () => props.messages,
   (list) => debounceSaveMessages(props.sessionId, list),
   { deep: true },
 )
 
 onMounted(hydrate)
-
-// 暴露给父组件追加消息
-defineExpose({ messages })
 </script>
 
 <template>
