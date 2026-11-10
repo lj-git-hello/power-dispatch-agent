@@ -17,7 +17,13 @@ import {
 
 import TaskApprovalPool from './TaskApprovalPool.vue'
 import TaskHistoryList from './TaskHistoryList.vue'
+import type { WorkflowEndpoints } from '../a2ui/types'
 import { clearSession, loadMessages } from '../engine/storage'
+
+// 端点配置由业务插件经宿主注入；缺省时子视图使用各自通用占位路径
+const props = defineProps<{
+  endpoints?: WorkflowEndpoints
+}>()
 
 type IdentityId = 'applicant_01' | 'dispatcher_lead'
 interface Identity {
@@ -209,6 +215,7 @@ onMounted(checkStorage)
             v-else
             :current-user-id="currentIdentity.id"
             :current-role="currentIdentity.role"
+            :endpoints="props.endpoints"
           />
         </div>
 
@@ -257,7 +264,7 @@ onMounted(checkStorage)
           </div>
 
           <div class="flex-1 overflow-y-auto p-3">
-            <slot name="business-form">
+            <slot name="business-form" :session-id="sessionId">
               <p class="text-xs text-gray-400">
                 业务插件表单位（后续挂载）
               </p>

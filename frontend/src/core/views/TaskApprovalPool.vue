@@ -6,7 +6,7 @@
  * 点击展开详情（卡片经 MessageCardHost）；核准/驳回走 useWorkflowAction，
  * 409 冲突时自动刷新剔除脏任务。
  */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import MessageCardHost from '../a2ui/MessageCardHost.vue'
 import type {
@@ -14,6 +14,7 @@ import type {
   ChatMessageRecord,
   ResumeActionContext,
   TaskSummary,
+  WorkflowEndpoints,
 } from '../a2ui/types'
 import { http } from '../api/http'
 import { useWorkflowAction } from '../composables/useWorkflowAction'
@@ -21,7 +22,19 @@ import { useWorkflowAction } from '../composables/useWorkflowAction'
 const props = defineProps<{
   currentUserId: string
   currentRole: string
+  /** 端点配置：由业务插件注入，缺省用通用占位路径 */
+  endpoints?: WorkflowEndpoints
 }>()
+
+// 缺省端点（core 不写死任何业务路径）
+const FALLBACK_ENDPOINTS: WorkflowEndpoints = {
+  tasks: '/v1/workflow/tasks',
+  messages: '/v1/workflow/messages',
+  resume: '/v1/workflow/resume',
+}
+const endpoints = computed<WorkflowEndpoints>(
+  () => props.endpoints ?? FALLBACK_ENDPOINTS,
+)
 
 const tasks = ref<TaskSummary[]>([])
 const selectedThreadId = ref<string | null>(null)
@@ -32,7 +45,7 @@ const { isSubmitting, resumeWorkflow, notice } = useWorkflowAction()
 async function fetchTasks() {
   // 通用待办端点（业务无关，按角色过滤）
   const { data } = await http.get<{ items: TaskSummary[] }>(
-    '/v1/workflow/tasks',
+    endpoints.value.tasks,
     { params: { assigned_role: props.currentRole } },
   )
   tasks.value = (data.items ?? []).filter(
@@ -45,7 +58,7 @@ async function fetchTasks() {
 async function openDetail(task: TaskSummary) {
   selectedThreadId.value = task.thread_id
   const { data } = await http.get<{ items: ChatMessageRecord[] }>(
-    '/v1/workflow/messages',
+    endpoints.value.messages,
     { params: { thread_id: task.thread_id } },
   )
   detailMessages.value = data.items ?? []
@@ -65,7 +78,7 @@ function makeResumeContext(
 
 async function decide(task: TaskSummary, approved: boolean) {
   await resumeWorkflow(
-    '/v1/workflow/resume',
+    endpoints.value.resume,
     makeResumeContext(task, approved),
     // 成功：刷新待办与详情
     async () => {

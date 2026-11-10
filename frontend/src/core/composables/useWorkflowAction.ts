@@ -67,10 +67,42 @@ export function useWorkflowAction() {
     }
   }
 
+  /**
+   * submitAudit —— 通用“已构造请求体”提交。
+   * 供需要自定义字段（业务适配）的卡片使用；仍统一处理 409 与提交状态。
+   */
+  async function submitAudit(
+    url: string,
+    body: Record<string, unknown>,
+    onSuccess?: (data: unknown) => void,
+    onConflict?: (detail: string) => void,
+  ): Promise<void> {
+    isSubmitting.value = true
+    errorMessage.value = null
+    notice.value = null
+
+    try {
+      const { data } = await http.post(url, body)
+      onSuccess?.(data)
+    } catch (error) {
+      const { status, detail } = readError(error)
+      if (status === 409) {
+        notice.value = { type: 'conflict', message: detail }
+        onConflict?.(detail)
+      } else {
+        errorMessage.value = detail
+        notice.value = { type: 'error', message: detail }
+      }
+    } finally {
+      isSubmitting.value = false
+    }
+  }
+
   return {
     isSubmitting,
     errorMessage,
     notice,
     resumeWorkflow,
+    submitAudit,
   }
 }

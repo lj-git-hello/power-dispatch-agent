@@ -54,3 +54,16 @@ export interface TaskSummary {
   lock_version: number
   current_node: string | null
 }
+
+/**
+ * WorkflowEndpoints —— 工作流端点配置（依赖反转）。
+ * 由各业务插件提供具体 URL，core 视图不写死任何业务路径。
+ */
+export interface WorkflowEndpoints {
+  /** 待办列表端点 */
+  tasks: string
+  /** 某线程消息端点 */
+  messages: string
+  /** 恢复/核签端点 */
+  resume: string
+}
