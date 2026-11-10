@@ -8,8 +8,8 @@
 
 import axios, { AxiosError, type AxiosInstance } from 'axios'
 
-/** localStorage 中 JWT 的键名 */
-export const TOKEN_STORAGE_KEY = 'access_token'
+/** localStorage 中 JWT 的键名（与身份切换器写入键保持一致） */
+export const TOKEN_STORAGE_KEY = 'auth_token'
 
 /** 归一化后的错误结构 */
 export interface ApiError {
