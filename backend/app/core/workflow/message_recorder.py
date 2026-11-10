@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from sqlalchemy import text
+
 from app.core.database import AsyncSessionLocal
 from app.models.ai_schema import AIChatMessage
 
@@ -54,3 +56,28 @@ class MessageRecorder:
             session.add(message)
             await session.commit()
         return message
+
+    @staticmethod
+    async def list_by_thread(thread_id: str) -> list[dict[str, Any]]:
+        """按 thread_id 读取消息 / 卡片快照，按 created_at 升序；无记录返回 []。
+
+        JSONB 列由驱动还原为 dict；时间转 ISO 字符串，保证可 JSON 序列化。
+        """
+        sql = text(
+            "SELECT id, thread_id, role, kind, content, card_type, "
+            "card_payload, retry_payload, created_at "
+            "FROM ai_chat_messages "
+            "WHERE thread_id = :thread_id "
+            "ORDER BY created_at ASC"
+        )
+        async with AsyncSessionLocal() as session:
+            rows = await session.execute(sql, {"thread_id": thread_id})
+
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row._mapping)
+            created_at = item.get("created_at")
+            if created_at is not None:
+                item["created_at"] = created_at.isoformat()
+            items.append(item)
+        return items

@@ -147,6 +147,23 @@ async def list_tasks(
 
 
 # ---------------------------------------------------------------------------
+# GET /messages
+# ---------------------------------------------------------------------------
+@power_dispatch_router.get("/messages")
+async def list_thread_messages(
+    thread_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """按 thread_id 读取消息 / 卡片快照（只读）；无记录返回空列表。"""
+    items = await MessageRecorder.list_by_thread(thread_id)
+    return {
+        "thread_id": thread_id,
+        "requester_id": current_user["sub"],
+        "items": items,
+    }
+
+
+# ---------------------------------------------------------------------------
 # POST /audit
 # ---------------------------------------------------------------------------
 @power_dispatch_router.post("/audit")
