@@ -15,7 +15,7 @@ export default defineConfig({
     proxy: {
       // 开发环境前端 /api 请求代理到后端，避免跨域
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
     },
