@@ -11,8 +11,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from app.core.rag.vector_service import VectorStoreService
+from app.plugins.power_grid.adapters import OMSGatewayAdapter, SCADAGatewayAdapter
+from app.plugins.power_grid.constants import POWER_RAG_BIZ_TAG
 from app.plugins.power_grid.states import DispatchState
-from app.services.acl import OMSGatewayAdapter, SCADAGatewayAdapter
 
 # 安规措施判定关键词
 GROUND_WIRE_KEYWORD = "接地线"
@@ -21,7 +22,7 @@ VOLTAGE_TEST_KEYWORD = "验电"
 # RAG 检索参数
 RAG_TOP_K = 3
 RAG_MIN_SIMILARITY = 0.3
-RAG_BIZ_TAG = "power_grid"
+RAG_BIZ_TAG = POWER_RAG_BIZ_TAG
 
 # 审核结论键
 DECISION_PERMITTED_KEY = "is_permitted"
@@ -91,7 +92,7 @@ async def human_audit_node(state: DispatchState) -> dict:
 async def issue_permit_node(state: DispatchState) -> dict:
     """核准通过后经 ACL 签发 SCADA 调度许可令。"""
     decision = state.get("audit_decision") or {}
-    permit_info = await SCADAGatewayAdapter.issue_dispatch_permit(
+    permit_info = await SCADAGatewayAdapter.issue_credential(
         biz_order_id=state.get("biz_order_id", ""),
         reviewer_id=decision.get(DECISION_REVIEWER_KEY, ""),
     )

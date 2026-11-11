@@ -4,7 +4,7 @@
 后续替换为对接企业 IAM / 统一权限平台时，仅需替换本文件内部实现，
 对外保持 IAMGatewayAdapter 的静态方法签名不变。
 
-形态与 OMSGatewayAdapter / SCADAGatewayAdapter 对齐：无状态静态网关。
+形态与各业务插件的外部系统适配器对齐：无状态静态网关。
 模块级 create_access_token / verify_access_token 为向后兼容别名，
 旧脚本与测试无需改动。
 
@@ -30,30 +30,18 @@ CLAIM_DEPT = "dept"
 CLAIM_ISSUED_AT = "iat"
 CLAIM_EXPIRES_AT = "exp"
 
-# 企业角色
-ROLE_APPLICANT = "APPLICANT"
-ROLE_DISPATCHER = "DISPATCHER"
+# 通用角色占位（语义由各业务插件自行解释，IAM 只做透传）
+ROLE_DEFAULT = "DEFAULT"
 
-# ---- 预置企业 Mock 账号 ----
-# dept：提报人为所属班组，调度值班长为所属部门，统一映射到 token 的 dept 声明
+# ---- 演示账号目录 ----
+# 通用 IAM 只维护"账号目录"，不解释任何业务角色；
+# 各业务插件在自身清单中声明演示身份，由插件装载器登记到这里。
 MOCK_USERS: dict[str, dict[str, str]] = {
-    "applicant_01": {
-        "user_id": "applicant_01",
-        "name": "张三",
-        "role": ROLE_APPLICANT,
-        "dept": "腊山运检工区",
-    },
-    "applicant_02": {
-        "user_id": "applicant_02",
-        "name": "李四",
-        "role": ROLE_APPLICANT,
-        "dept": "玉皇顶变电工区",
-    },
-    "dispatcher_lead": {
-        "user_id": "dispatcher_lead",
-        "name": "王调度长",
-        "role": ROLE_DISPATCHER,
-        "dept": "地调控制中心",
+    "demo_user": {
+        "user_id": "demo_user",
+        "name": "演示用户",
+        "role": ROLE_DEFAULT,
+        "dept": "",
     },
 }
 
@@ -70,6 +58,25 @@ def _get_secret_key() -> str:
 
 class IAMGatewayAdapter:
     """统一身份认证网关防腐适配器（Mock 实现，无状态静态网关）。"""
+
+    @staticmethod
+    def register_user(
+        user_id: str,
+        name: str,
+        role: str,
+        dept: str = "",
+    ) -> None:
+        """登记演示账号（由插件装载器在启动时调用）。
+
+        通用 IAM 只维护账号目录；具体业务身份由插件在清单中声明，
+        通用层不预置任何业务角色名或部门名。
+        """
+        MOCK_USERS[user_id] = {
+            "user_id": user_id,
+            "name": name,
+            "role": role,
+            "dept": dept,
+        }
 
     @staticmethod
     def create_access_token(user_id: str) -> str:

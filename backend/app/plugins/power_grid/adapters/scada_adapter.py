@@ -2,7 +2,7 @@
 
 模拟调度自动化系统（SCADA）签发具备法律效力的电网调度许可令。
 后续替换为真实 SCADA / 调度主站接口时，仅替换本类内部实现，
-对外保持 issue_dispatch_permit 签名不变。
+对外保持 issue_credential 签名不变。
 """
 
 import hashlib
@@ -32,7 +32,7 @@ class SCADAGatewayAdapter:
     """
 
     @staticmethod
-    async def issue_dispatch_permit(
+    async def issue_credential(
         biz_order_id: str, reviewer_id: str
     ) -> dict[str, Any]:
         """模拟签发电网调度许可令。
