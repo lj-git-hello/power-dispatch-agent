@@ -5,8 +5,10 @@ core 层：业务插件只描述"建一条什么样的映射"，不直接触碰 
 与 MessageRecorder 保持同一范式：通用层封装持久化，插件只做编排。
 """
 
+from datetime import datetime
 from typing import Any
 
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 
 from app.core.database import AsyncSessionLocal
@@ -16,6 +18,8 @@ from app.models.ai_schema import AIThreadMapping
 STATUS_DRAFT = "DRAFT"
 # 通用活跃状态（无状态机的纯对话线程）
 STATUS_ACTIVE = "ACTIVE"
+# 通用挂起状态（等待人工介入）
+STATUS_WAITING_HUMAN = "WAITING_HUMAN"
 # 通用兜底角色（无状态机的纯对话线程）
 ROLE_SYSTEM = "SYSTEM"
 
@@ -65,14 +69,71 @@ class ThreadMappingStore:
 
     @staticmethod
     async def archive(thread_id: str) -> bool:
-        """归档线程映射（软删除）；返回是否命中记录。"""
+        """归档线程映射（软删除）；返回是否命中记录。
+
+        归档后该线程不再出现在待办池（见 HITLController.get_pending_tasks），
+        但记录本身保留以维持审计链路。
+        """
         async with AsyncSessionLocal() as session:
             mapping = await session.get(AIThreadMapping, thread_id)
             if mapping is None:
                 return False
             mapping.is_archived = True
+            mapping.archived_at = func.now()
             await session.commit()
             return True
+
+    @staticmethod
+    async def archive_many(thread_ids: list[str]) -> list[str]:
+        """批量归档线程映射；返回实际命中并置为归档的 thread_id 列表。
+
+        已归档的记录不重复处理（幂等）。
+        """
+        if not thread_ids:
+            return []
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text(
+                    "UPDATE ai_thread_mappings "
+                    "SET is_archived = true, archived_at = now() "
+                    "WHERE thread_id = ANY(:ids) AND is_archived = false "
+                    "RETURNING thread_id"
+                ),
+                {"ids": list(thread_ids)},
+            )
+            archived = [row[0] for row in result]
+            await session.commit()
+        return archived
+
+    @staticmethod
+    async def list_pending(
+        before: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        """列出未归档的挂起记录（供归档脚本预览 / 运维巡检）。
+
+        - before 为 None 时返回全部未归档的 WAITING_HUMAN 记录；
+        - before 不为 None 时只返回 created_at 早于该时刻的记录。
+        """
+        base_sql = (
+            "SELECT thread_id, session_id, creator_id, creator_role, "
+            "assigned_role, status, lock_version, created_at "
+            "FROM ai_thread_mappings "
+            "WHERE status = :status AND is_archived = false "
+        )
+        params: dict[str, Any] = {"status": STATUS_WAITING_HUMAN}
+        if before is None:
+            sql = base_sql + "ORDER BY created_at"
+        else:
+            sql = base_sql + "AND created_at < :before ORDER BY created_at"
+            params["before"] = before
+
+        async with AsyncSessionLocal() as session:
+            rows = await session.execute(text(sql), params)
+            items = [dict(row._mapping) for row in rows]
+        for item in items:
+            if item.get("created_at") is not None:
+                item["created_at"] = item["created_at"].isoformat()
+        return items
 
     @staticmethod
     async def get(thread_id: str) -> dict[str, Any] | None:
@@ -91,6 +152,11 @@ class ThreadMappingStore:
                 "lock_version": mapping.lock_version,
                 "current_node": mapping.current_node,
                 "is_archived": mapping.is_archived,
+                "created_at": (
+                    mapping.created_at.isoformat()
+                    if mapping.created_at is not None
+                    else None
+                ),
             }
 
 
@@ -98,5 +164,6 @@ __all__ = [
     "ROLE_SYSTEM",
     "STATUS_ACTIVE",
     "STATUS_DRAFT",
+    "STATUS_WAITING_HUMAN",
     "ThreadMappingStore",
 ]

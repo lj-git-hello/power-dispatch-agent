@@ -16,10 +16,10 @@ from sqlalchemy import text
 
 from app.core.database import AsyncSessionLocal
 from app.core.workflow.graph_registry import DEFAULT_GRAPH_NAME, GraphRegistry
+from app.core.workflow.thread_mapping_store import STATUS_WAITING_HUMAN
 
 # 通用状态常量（禁止魔法值）
 STATUS_RUNNING = "RUNNING"
-STATUS_WAITING_HUMAN = "WAITING_HUMAN"
 
 
 class HITLController:
@@ -76,7 +76,11 @@ class HITLController:
 
     @staticmethod
     async def get_pending_tasks(assigned_role: str) -> list[dict[str, Any]]:
-        """查询指定角色的待办记录（WAITING_HUMAN）。"""
+        """查询指定角色的待办记录（WAITING_HUMAN 且未归档）。
+
+        归档过滤是必需的：待办池是"只增不减"的工作队列，一旦缺少生命周期过滤，
+        历史遗留的挂起记录会永久沉在审批人池里（无人核准即永不消失）。
+        """
         async with AsyncSessionLocal() as session:
             rows = await session.execute(
                 text(
@@ -85,6 +89,7 @@ class HITLController:
                     "created_at "
                     "FROM ai_thread_mappings "
                     "WHERE status = :status AND assigned_role = :role "
+                    "AND is_archived = false "
                     "ORDER BY created_at"
                 ),
                 {
