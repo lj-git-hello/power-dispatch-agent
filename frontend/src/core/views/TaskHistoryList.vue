@@ -5,15 +5,12 @@
  * 渲染源由外部（工作台 store）经 props.messages 传入；挂载时从 IndexedDB
  * 离线恢复，文本渲染气泡，卡片经 MessageCardHost；消息变更防抖持久化。
  */
-import { onMounted, watch } from 'vue'
+import { onMounted } from 'vue'
 
 import MessageCardHost from '../a2ui/MessageCardHost.vue'
 import type { CardActionContext, ChatMessageRecord } from '../a2ui/types'
-import {
-  debounceSaveMessages,
-  loadMessages,
-} from '../engine/storage'
-import { renderMarkdown } from '@/utils/markdown'
+import { loadMessages } from '../engine/storage'
+import { renderMarkdown } from '@/core/utils/markdown'
 
 const props = defineProps<{
   sessionId: string
@@ -40,13 +37,8 @@ async function hydrate() {
   if (stored) props.messages.splice(0, props.messages.length, ...stored)
 }
 
-// 外部数组变更（含 push 卡片）→ 防抖落盘
-watch(
-  () => props.messages,
-  (list) => debounceSaveMessages(props.sessionId, list),
-  { deep: true },
-)
-
+// 持久化责任已收敛到 useWorkbenchStore（避免切换 Tab 时漏写），
+// 本视图只负责离线恢复与渲染。
 onMounted(hydrate)
 </script>
 
