@@ -9,12 +9,15 @@ OPENAI_MODEL_NAME（那是聊天模型，无法用于 embeddings 接口）。
 """
 
 import hashlib
+import logging
 import math
 import os
 import struct
 from collections.abc import Sequence
 
 import openai
+
+logger = logging.getLogger(__name__)
 
 # 单次请求最大文本数。
 # 【关键防御】实测当前编码套餐 embeddings 入口存在批量行为异常：当一次请求
@@ -147,6 +150,21 @@ class EmbeddingService:
                 openai.APIConnectionError,
                 openai.RateLimitError,
                 openai.APIError,
+                # 供应商返回空 data 时，openai SDK 抛的是裸 ValueError
+                # （openai/lib/_parsing/_embeddings.py: "No embedding data received"），
+                # 不属于 APIError 体系，必须显式纳入降级范围。
+                ValueError,
             ):
+                logger.warning(
+                    "Embedding 批次失败，降级为确定性伪向量（批起始位置=%d）",
+                    start,
+                    exc_info=True,
+                )
+                results.extend(self._pseudo_embedding(text) for text in batch)
+            except Exception:  # noqa: BLE001 —— 兜底：任何未预期异常都不得中断入库链路
+                logger.exception(
+                    "Embedding 批次异常，降级为确定性伪向量（批起始位置=%d）",
+                    start,
+                )
                 results.extend(self._pseudo_embedding(text) for text in batch)
         return results
