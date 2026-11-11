@@ -5,12 +5,27 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from psycopg_pool import AsyncConnectionPool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
+
+def _require_env(key: str) -> str:
+    """读取必需的环境变量；缺失即 fail-fast。
+
+    严禁为口令类变量提供兜底默认值 —— 缺失应让进程启动失败并给出明确提示，
+    而不是静默使用弱口令连接生产库。
+    """
+    value = os.getenv(key)
+    if not value:
+        raise RuntimeError(
+            f"缺少必需的环境变量 {key}：请在 backend/.env 中配置后重启。"
+        )
+    return value
+
+
 # 1. 连接基础配置
-DB_USER = os.getenv("DB_USER", "ai_admin")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "ai_secure_password_2026")
+DB_USER = _require_env("DB_USER")
+DB_PASSWORD = _require_env("DB_PASSWORD")
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("DB_NAME", "power_dispatch_ai")
+DB_NAME = _require_env("DB_NAME")
 
 # 业务连接串 (SQLAlchemy + asyncpg)
 ASYNC_DB_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"

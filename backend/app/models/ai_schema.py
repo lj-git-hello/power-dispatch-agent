@@ -166,7 +166,12 @@ class AIExecutionTrace(Base):
 
 
 class AIKnowledgeBase(Base):
-    """安规向量知识库表：条款切片 + 1536 维 Embedding（HNSW 余弦检索）。"""
+    """安规向量知识库表：条款切片 + 1024 维 Embedding（HNSW 余弦检索）。
+
+    维度说明：底层 doubao-embedding-vision 原生输出 1536 维，经 Matryoshka
+    显式降维到 1024 维（迁移脚本 844a9489b970_resize_embedding_to_1024.py），
+    以满足 pgvector ANN 索引 ≤2000 维的硬限制，同时降低存储与检索开销。
+    """
 
     __tablename__ = "ai_knowledge_base"
     __table_args__ = (

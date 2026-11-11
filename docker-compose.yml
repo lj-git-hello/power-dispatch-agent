@@ -6,9 +6,12 @@ services:
     container_name: power_ai_postgres
     restart: always
     environment:
-      POSTGRES_DB: power_dispatch_ai
-      POSTGRES_USER: ai_admin
-      POSTGRES_PASSWORD: ai_secure_password_2026
+      # 口令一律来自环境变量，严禁硬编码（与 backend/.env 的 DB_* 同源）。
+      # 启动前请在项目根目录准备 .env（可从 backend/.env 复制 DB_* 各项）：
+      #   DB_NAME / DB_USER / DB_PASSWORD
+      POSTGRES_DB: ${DB_NAME:-power_dispatch_ai}
+      POSTGRES_USER: ${DB_USER:-ai_admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?请先在 .env 中配置 DB_PASSWORD 后再启动容器}
     ports:
       - "5432:5432"
     volumes:
@@ -21,7 +24,7 @@ services:
       -c work_mem=32MB 
       -c maintenance_work_mem=128MB
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ai_admin -d power_dispatch_ai"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-ai_admin} -d ${DB_NAME:-power_dispatch_ai}"]
       interval: 5s
       timeout: 5s
       retries: 5
