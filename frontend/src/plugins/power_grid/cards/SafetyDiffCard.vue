@@ -11,6 +11,7 @@ import { computed } from 'vue'
 import { useWorkflowAction } from '@/core/composables/useWorkflowAction'
 import { useCurrentUser } from '@/core/composables/useCurrentUser'
 import type { ChatMessageRecord } from '@/core/a2ui/types'
+import { PluginRegistry } from '@/core/plugins/registry'
 
 const props = defineProps<{
   message: ChatMessageRecord
@@ -37,7 +38,10 @@ const violations = computed<string[]>(
   () => (payload.value.violations as string[] | undefined) ?? [],
 )
 
-const AUDIT_URL = '/v1/power-dispatch/audit'
+// 端点由插件注册表下发（后端 manifest 为唯一真相源），此处不硬编码业务路径
+const auditUrl = computed(
+  () => PluginRegistry.getActive()?.endpoints.resume ?? '',
+)
 const ROLE_DISPATCHER = 'DISPATCHER'
 
 const { isSubmitting, notice, submitAudit } = useWorkflowAction()
@@ -47,12 +51,15 @@ const { hasAnyRole } = useCurrentUser()
 const canAudit = computed(() => hasAnyRole(ROLE_DISPATCHER))
 
 async function decide(permitted: boolean) {
+  if (!auditUrl.value) {
+    return
+  }
   await submitAudit(
-    AUDIT_URL,
+    auditUrl.value,
     {
       thread_id: threadId.value,
       lock_version: lockVersion.value,
-      is_permitted: permitted,
+      approved: permitted,
       opinion: permitted ? '核准许可' : '驳回修改',
     },
     // 成功

@@ -5,9 +5,10 @@
  * 填写变电站/电压/工作内容/安全措施，提交到后端 apply 端点；
  * 成功后通知父级刷新并可折叠抽屉。
  */
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 
 import { http } from '@/core/api/http'
+import { PluginRegistry } from '@/core/plugins/registry'
 
 const props = defineProps<{
   sessionId: string
@@ -41,17 +42,26 @@ const form = reactive({
 const isSubmitting = ref(false)
 const errorMessage = ref<string | null>(null)
 
+// 提报端点由插件注册表下发（后端 manifest 为唯一真相源）
+const applyUrl = computed(
+  () => PluginRegistry.getActive()?.endpoints.apply ?? '',
+)
+
 function selectedMeasureTexts(): string[] {
   return MEASURE_OPTIONS.filter((_, index) => form.selectedMeasures[index])
 }
 
 async function submit() {
+  if (!applyUrl.value) {
+    errorMessage.value = '提报端点未配置，请检查业务插件注册状态。'
+    return
+  }
   isSubmitting.value = true
   errorMessage.value = null
 
   try {
     const { data } = await http.post<ApplyResult>(
-      '/v1/power-dispatch/apply',
+      applyUrl.value,
       {
         session_id: props.sessionId,
         substation: form.substation,

@@ -13,27 +13,21 @@ import type {
   CardActionContext,
   ChatMessageRecord,
   TaskSummary,
-  WorkflowEndpoints,
 } from '../a2ui/types'
 import { http } from '../api/http'
 import { useWorkflowAction } from '../composables/useWorkflowAction'
+import { PluginRegistry } from '../plugins/registry'
 
 const props = defineProps<{
   currentUserId: string
   currentRole: string
-  /** 端点配置：由业务插件注入，缺省用通用占位路径 */
-  endpoints?: WorkflowEndpoints
 }>()
 
-// 缺省端点（core 不写死任何业务路径）
-const FALLBACK_ENDPOINTS: WorkflowEndpoints = {
-  tasks: '/v1/workflow/tasks',
-  messages: '/v1/workflow/messages',
-  resume: '/v1/workflow/resume',
-}
-const endpoints = computed<WorkflowEndpoints>(
-  () => props.endpoints ?? FALLBACK_ENDPOINTS,
-)
+// 端点由插件注册表下发（后端 manifest 为唯一真相源）；core 不写死任何业务路径
+const endpoints = computed(() => PluginRegistry.activeEndpoints.value)
+
+/** 端点缺失（插件未注册 / 清单未同步）时的显式配置错误 */
+const configError = ref<string | null>(null)
 
 const tasks = ref<TaskSummary[]>([])
 const selectedThreadId = ref<string | null>(null)
@@ -44,10 +38,16 @@ const { isSubmitting, submitAudit, notice } = useWorkflowAction()
 let loaded = false
 
 async function fetchTasks(force = false) {
+  const tasksUrl = endpoints.value?.tasks
+  if (!tasksUrl) {
+    configError.value =
+      '工作流端点未配置：业务插件未注册或后端清单未同步，请检查插件装载状态。'
+    return
+  }
+  configError.value = null
+
   // 角色由后端按 JWT 判定，前端不传任何角色参数
-  const { data } = await http.get<{ items: TaskSummary[] }>(
-    endpoints.value.tasks,
-  )
+  const { data } = await http.get<{ items: TaskSummary[] }>(tasksUrl)
   tasks.value = data.items ?? []
   loaded = true
   void force
@@ -59,21 +59,33 @@ async function activate() {
 }
 
 async function openDetail(task: TaskSummary) {
+  const messagesUrl = endpoints.value?.messages
+  if (!messagesUrl) {
+    configError.value =
+      '工作流端点未配置：业务插件未注册或后端清单未同步，请检查插件装载状态。'
+    return
+  }
   selectedThreadId.value = task.thread_id
   const { data } = await http.get<{ items: ChatMessageRecord[] }>(
-    endpoints.value.messages,
+    messagesUrl,
     { params: { thread_id: task.thread_id } },
   )
   detailMessages.value = data.items ?? []
 }
 
 async function decide(task: TaskSummary, approved: boolean) {
+  const resumeUrl = endpoints.value?.resume
+  if (!resumeUrl) {
+    configError.value =
+      '工作流端点未配置：业务插件未注册或后端清单未同步，请检查插件装载状态。'
+    return
+  }
   await submitAudit(
-    endpoints.value.resume,
+    resumeUrl,
     {
       thread_id: task.thread_id,
       lock_version: task.lock_version,
-      is_permitted: approved,
+      approved,
       opinion: approved ? '核准许可' : '驳回修改',
     },
     // 成功：刷新待办与详情
@@ -113,6 +125,13 @@ defineExpose({ refresh: fetchTasks, activate })
   <div class="flex h-full overflow-hidden">
     <!-- 待办列表 -->
     <div class="w-64 shrink-0 overflow-y-auto border-r border-gray-200 p-3">
+      <p
+        v-if="configError"
+        class="mb-2 rounded-md bg-red-50 p-2 text-xs text-red-600"
+      >
+        {{ configError }}
+      </p>
+
       <p v-if="tasks.length === 0" class="text-sm text-gray-400">
         暂无待办任务
       </p>
