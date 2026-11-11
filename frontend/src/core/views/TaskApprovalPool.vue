@@ -12,7 +12,6 @@ import MessageCardHost from '../a2ui/MessageCardHost.vue'
 import type {
   CardActionContext,
   ChatMessageRecord,
-  ResumeActionContext,
   TaskSummary,
   WorkflowEndpoints,
 } from '../a2ui/types'
@@ -40,19 +39,23 @@ const tasks = ref<TaskSummary[]>([])
 const selectedThreadId = ref<string | null>(null)
 const detailMessages = ref<ChatMessageRecord[]>([])
 
-const { isSubmitting, resumeWorkflow, notice } = useWorkflowAction()
+const { isSubmitting, submitAudit, notice } = useWorkflowAction()
 
-async function fetchTasks() {
-  // 通用待办端点（业务无关，按角色过滤）
+let loaded = false
+
+async function fetchTasks(force = false) {
+  // 角色由后端按 JWT 判定，前端不传任何角色参数
   const { data } = await http.get<{ items: TaskSummary[] }>(
     endpoints.value.tasks,
-    { params: { assigned_role: props.currentRole } },
   )
-  tasks.value = (data.items ?? []).filter(
-    (task) =>
-      task.status === 'WAITING_HUMAN' &&
-      task.assigned_role === props.currentRole,
-  )
+  tasks.value = data.items ?? []
+  loaded = true
+  void force
+}
+
+/** Tab 激活时调用：首次进入懒加载，重复进入不重复请求。 */
+async function activate() {
+  if (!loaded) await fetchTasks()
 }
 
 async function openDetail(task: TaskSummary) {
@@ -64,22 +67,15 @@ async function openDetail(task: TaskSummary) {
   detailMessages.value = data.items ?? []
 }
 
-function makeResumeContext(
-  task: TaskSummary,
-  approved: boolean,
-): ResumeActionContext {
-  return {
-    thread_id: task.thread_id,
-    lock_version: task.lock_version,
-    action: approved ? 'approve' : 'reject',
-    payload: null,
-  }
-}
-
 async function decide(task: TaskSummary, approved: boolean) {
-  await resumeWorkflow(
+  await submitAudit(
     endpoints.value.resume,
-    makeResumeContext(task, approved),
+    {
+      thread_id: task.thread_id,
+      lock_version: task.lock_version,
+      is_permitted: approved,
+      opinion: approved ? '核准许可' : '驳回修改',
+    },
     // 成功：刷新待办与详情
     async () => {
       await fetchTasks()
@@ -107,9 +103,10 @@ function makeActionContext(message: ChatMessageRecord): CardActionContext {
   }
 }
 
-onMounted(fetchTasks)
+// 组件仅在切到审批池 Tab 时挂载，挂载即懒加载（首次点击才发请求）
+onMounted(activate)
 
-defineExpose({ refresh: fetchTasks })
+defineExpose({ refresh: fetchTasks, activate })
 </script>
 
 <template>
