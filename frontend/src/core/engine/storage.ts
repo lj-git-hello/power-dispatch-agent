@@ -45,6 +45,42 @@ export async function clearSession(sessionId: string): Promise<void> {
   await messageStore.removeItem(sessionKey(sessionId))
 }
 
+// ---------------------------------------------------------------------------
+// 会话 / 工单集合（左栏【我的会话】），按用户隔离持久化
+// ---------------------------------------------------------------------------
+
+function conversationsKey(userId: string): string {
+  return `conversations:${userId}`
+}
+
+/** 保存某用户的会话集合。 */
+export async function saveConversations<T>(userId: string, list: T): Promise<T> {
+  const envelope: MessageEnvelope<T> = { updatedAt: Date.now(), messages: list }
+  await messageStore.setItem(conversationsKey(userId), envelope)
+  return list
+}
+
+/** 读取某用户的会话集合；不存在时返回 null。 */
+export async function loadConversations<T>(userId: string): Promise<T | null> {
+  const envelope = await messageStore.getItem<MessageEnvelope<T>>(conversationsKey(userId))
+  return envelope ? envelope.messages : null
+}
+
+/** 集合持久化防抖（按用户隔离）。 */
+const conversationTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+export function debounceSaveConversations<T>(userId: string, list: T): void {
+  const existingTimer = conversationTimers.get(userId)
+  if (existingTimer) clearTimeout(existingTimer)
+
+  const timer = setTimeout(() => {
+    conversationTimers.delete(userId)
+    void saveConversations(userId, list)
+  }, SAVE_DEBOUNCE_MS)
+
+  conversationTimers.set(userId, timer)
+}
+
 /** 已注册的防抖计时器（按会话隔离） */
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
 

@@ -53,6 +53,8 @@ export interface TaskSummary {
   status: string
   lock_version: number
   current_node: string | null
+  /** 列表展示标题（可缺省，回退展示 thread_id） */
+  title?: string
 }
 
 /**

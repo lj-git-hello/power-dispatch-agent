@@ -17,8 +17,12 @@ import {
 
 import TaskApprovalPool from './TaskApprovalPool.vue'
 import TaskHistoryList from './TaskHistoryList.vue'
-import type { WorkflowEndpoints } from '../a2ui/types'
+import type {
+  TaskSummary,
+  WorkflowEndpoints,
+} from '../a2ui/types'
 import { http } from '../api/http'
+import { useCurrentUser } from '../composables/useCurrentUser'
 import { clearSession, loadMessages } from '../engine/storage'
 import {
   type ApplyResult,
@@ -33,6 +37,7 @@ const props = defineProps<{
 // 通用工作台共享状态
 const workbench = useWorkbenchStore()
 const { state: workbenchState } = workbench
+const { setCurrentUser } = useCurrentUser()
 
 type IdentityId = 'applicant_01' | 'dispatcher_lead'
 interface Identity {
@@ -64,6 +69,10 @@ async function switchIdentity(event: Event) {
   identityId.value = (event.target as HTMLSelectElement).value as IdentityId
   try {
     await loginAs(identityId.value)
+    // 同步身份供深层卡片做权限判定
+    setCurrentUser(identityId.value, currentIdentity.value.role)
+    // 切换身份后加载该用户的会话集合（审批人本地通常为空）
+    await workbench.hydrateConversations(identityId.value)
   } catch (error) {
     console.error('身份切换失败：', error)
   }
@@ -90,9 +99,16 @@ const draftText = ref('')
 const storageHealthy = ref(true)
 
 function createNewSession() {
-  // 延迟落库：仅本地重置会话与消息，不发请求
+  // 仅重置当前会话与中栏消息；严禁删除/覆盖会话集合中已有记录
   workbench.setSession(newSessionId())
   draftText.value = ''
+  activeTab.value = 'history'
+}
+
+/** 点击会话项：切换到该会话并恢复其中栏消息。 */
+async function selectConversation(summary: TaskSummary) {
+  await workbench.openConversation(summary)
+  activeTab.value = 'history'
 }
 
 /** 表单提交成功后的统一收口（供 App 经组件 ref 调用）。 */
@@ -131,6 +147,8 @@ onMounted(async () => {
   await loginAs(identityId.value).catch((error) =>
     console.error('启动登录失败：', error),
   )
+  setCurrentUser(identityId.value, currentIdentity.value.role)
+  await workbench.hydrateConversations(identityId.value)
   await checkStorage()
 })
 </script>
@@ -212,12 +230,51 @@ onMounted(async () => {
           </button>
         </div>
 
-        <!-- 列表树（占位） -->
+        <!-- 列表树：Tab1 渲染【我的会话】集合 -->
         <div class="flex-1 overflow-y-auto p-3">
-          <div class="flex items-center gap-2 text-xs text-gray-500">
-            <ClipboardList class="h-4 w-4" />
-            <span class="truncate">{{ sessionId }}</span>
-          </div>
+          <template v-if="activeTab === 'history'">
+            <p
+              v-if="workbenchState.conversationList.length === 0"
+              class="text-xs text-gray-400"
+            >
+              暂无会话，可在右侧填报发起
+            </p>
+
+            <button
+              v-for="item in workbenchState.conversationList"
+              :key="item.thread_id"
+              type="button"
+              class="mb-2 w-full rounded-md border p-2 text-left transition hover:bg-white"
+              :class="
+                sessionId === item.session_id
+                  ? 'border-blue-500 bg-blue-50'
+                  : 'border-gray-200 bg-white'
+              "
+              @click="selectConversation(item)"
+            >
+              <div class="flex items-center gap-1.5">
+                <ClipboardList class="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                <span class="truncate text-xs font-medium text-gray-800">
+                  {{ item.title ?? item.thread_id }}
+                </span>
+              </div>
+              <div class="mt-1 flex items-center gap-1.5">
+                <span
+                  class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-700"
+                >
+                  {{ item.status }}
+                </span>
+                <span class="text-[10px] text-gray-500">
+                  Lock: v{{ item.lock_version }}
+                </span>
+              </div>
+            </button>
+          </template>
+
+          <!-- Tab2：待办审批池由中栏独立拉取，此处不渲染其数据 -->
+          <p v-else class="text-xs text-gray-400">
+            待办审批池见中栏
+          </p>
         </div>
 
         <!-- 本地存储运维 -->
