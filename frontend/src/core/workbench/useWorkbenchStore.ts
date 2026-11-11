@@ -25,7 +25,10 @@ import {
 export interface ApplyResult {
   thread_id: string
   status: string
-  card: Record<string, unknown>
+  /** 卡片快照；流程在提报阶段即终止时可能为空 */
+  card?: Record<string, unknown>
+  /** 文本结果（与 card 二选一）：如流程自动终止时的说明 */
+  message?: string
 }
 
 interface WorkbenchState {
@@ -89,20 +92,22 @@ async function hydrateConversations(userId: string) {
   )
 }
 
-/** 把后端 apply 返回结果收口为：中栏卡片消息 + 会话集合 upsert + 折叠右栏。 */
+/** 把后端 apply 返回结果收口为：中栏消息 + 会话集合 upsert + 折叠右栏。 */
 function applyResult(result: ApplyResult) {
   const card = result.card ?? {}
   const cardType = String(card.card_type ?? '')
+  const text = result.message ?? ''
 
-  // 中栏：卡片快照消息（MessageCardHost 据 card_type 动态渲染）
+  // 中栏：卡片快照消息（MessageCardHost 据 card_type 动态渲染）；
+  // 后端返回文本结果时（如流程自动终止）退化为纯文本消息，避免空卡片。
   const message: ChatMessageRecord = {
     id: crypto.randomUUID(),
     thread_id: result.thread_id,
     role: 'assistant',
-    kind: 'card',
-    content: null,
-    card_type: cardType,
-    card_payload: card,
+    kind: text ? 'text' : 'card',
+    content: text || null,
+    card_type: text ? null : cardType,
+    card_payload: text ? null : card,
     retry_payload: null,
     created_at: new Date().toISOString(),
   }

@@ -9,17 +9,13 @@ import { computed, reactive, ref } from 'vue'
 
 import { http } from '@/core/api/http'
 import { PluginRegistry } from '@/core/plugins/registry'
+import type { ApplyResult } from '@/core/workbench/useWorkbenchStore'
 
 const props = defineProps<{
   sessionId: string
 }>()
 
-/** apply 成功返回的完整载荷 */
-interface ApplyResult {
-  thread_id: string
-  status: string
-  card: Record<string, unknown>
-}
+/** apply 成功返回的完整载荷（结构由通用层定义，插件不另立契约） */
 
 const emit = defineEmits<{
   submitted: [result: ApplyResult]
