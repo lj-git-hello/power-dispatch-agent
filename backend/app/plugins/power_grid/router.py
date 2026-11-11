@@ -25,6 +25,7 @@ from app.plugins.power_grid.constants import (
     POWER_ROLE_DISPATCHER,
     POWER_STATUS_PERMITTED,
     POWER_STATUS_REJECTED,
+    POWER_STATUS_SAFETY_REJECTED,
     POWER_STATUS_WAITING_HUMAN,
 )
 
@@ -103,6 +104,33 @@ async def apply_dispatch(
 
     snapshot = await graph.aget_state(config)
     state_values = dict(snapshot.values)
+    # 图是否真的挂起在人工审计节点上：
+    # - 挂起（interrupts 非空）→ 本单确实在等人核签，留在待办池；
+    # - 未挂起（安规校验未通过，图直接 END）→ 本单不该进入人工审批队列，
+    #   必须落终态并归档，否则会以"待审批"身份永久滞留在审批池里。
+    interrupted = bool(snapshot.interrupts)
+
+    if not interrupted:
+        violations = state_values.get("violations", []) or []
+        await HITLController.finalize_status(
+            thread_id=thread_id,
+            final_status=POWER_STATUS_SAFETY_REJECTED,
+        )
+        await ThreadMappingStore.archive(thread_id)
+        detail = "；".join(violations) if violations else "未登记具体违规项"
+        content = f"安规校验未通过，检修申请已自动否决，不进入调度长审批池。{detail}"
+        await MessageRecorder.record_text(
+            thread_id=thread_id,
+            role="assistant",
+            content=content,
+        )
+        return {
+            "thread_id": thread_id,
+            "status": POWER_STATUS_SAFETY_REJECTED,
+            "interrupted": False,
+            "message": content,
+            "card": {},
+        }
 
     card_payload = {
         "card_type": POWER_CARD_TYPE_DISPATCHER_AUDIT,
@@ -126,7 +154,7 @@ async def apply_dispatch(
     return {
         "thread_id": thread_id,
         "status": POWER_STATUS_WAITING_HUMAN,
-        "interrupted": bool(snapshot.interrupts),
+        "interrupted": True,
         "card": card_payload,
     }
 
