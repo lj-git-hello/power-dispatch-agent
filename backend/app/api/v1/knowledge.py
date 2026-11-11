@@ -8,38 +8,20 @@
 biz_tag / doc_code 体现，任意业务复用同一端点。
 """
 
-import os
 from collections.abc import Sequence
 
 from fastapi import APIRouter, Depends
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
+from app.core.llm import build_chat_model
 from app.core.security import get_current_user
 from app.core.rag.vector_service import VectorStoreService
 
 
-def _build_qa_llm() -> ChatOpenAI | None:
-    """构建问答专用低温 LLM；未配置 Key 时返回 None（端点走确定性降级）。
-
-    本路由属通用脚手架，自带独立 LLM，不依赖具体业务状态机模块。
-    """
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        return None
-    return ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL_NAME", "doubao-seed-2.1-lite"),
-        api_key=api_key,
-        base_url=os.getenv("OPENAI_BASE_URL", None),
-        temperature=0.1,
-        timeout=float(os.getenv("LLM_TIMEOUT", "30")),
-        max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
-    )
-
-
-# 模块级单例
-qa_llm = _build_qa_llm()
+# 模块级单例：未配置 API Key 时为 None（端点走确定性降级）。
+# 通用脚手架自带独立 LLM，不依赖任何具体业务状态机模块。
+qa_llm = build_chat_model(temperature=0.1)
 
 # AIKnowledgeBase：知识切片 ORM 模型。检索/问答经服务层访问，
 # 显式导入留给本路由后续的知识管理端点使用。
