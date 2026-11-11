@@ -135,10 +135,18 @@ async def apply_dispatch(
 # ---------------------------------------------------------------------------
 @power_dispatch_router.get("/tasks")
 async def list_tasks(
-    current_user: dict = Depends(require_roles([ROLE_DISPATCHER])),
+    current_user: dict = Depends(get_current_user),
 ) -> dict:
-    """调度长待办池（委托通用 HITLController）。"""
-    items = await HITLController.get_pending_tasks(ROLE_DISPATCHER)
+    """待办任务审批池（Pending Task Pool）。
+
+    角色由后端依据 JWT 判定，忽略任何前端传入的角色参数：
+    - DISPATCHER：返回其名下 WAITING_HUMAN 待审工单；
+    - APPLICANT（及其它非审批角色）：允许访问，安全返回空列表，不抛 403。
+    """
+    if current_user.get("role") == ROLE_DISPATCHER:
+        items = await HITLController.get_pending_tasks(ROLE_DISPATCHER)
+    else:
+        items = []
     return {
         "total": len(items),
         "reviewer_id": current_user["sub"],
