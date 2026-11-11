@@ -6,6 +6,7 @@
  */
 
 import localforage from 'localforage'
+import { isReactive, toRaw } from 'vue'
 
 /** 防抖持久化延迟（毫秒） */
 const SAVE_DEBOUNCE_MS = 1000
@@ -23,13 +24,37 @@ interface MessageEnvelope<T> {
   messages: T
 }
 
+/**
+ * 深度去响应式：把 Vue 响应式代理还原为纯 JS 对象。
+ *
+ * IndexedDB 使用结构化克隆（structured clone），遇到 Proxy 会抛
+ * DataCloneError，因此落盘前必须剥离响应式代理。
+ */
+function deepToPlain<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => deepToPlain(item)) as unknown as T
+  }
+  if (value !== null && typeof value === 'object') {
+    const raw = isReactive(value) ? toRaw(value) : value
+    const result: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(raw as Record<string, unknown>)) {
+      result[key] = deepToPlain(item)
+    }
+    return result as T
+  }
+  return value
+}
+
 function sessionKey(sessionId: string): string {
   return `session:${sessionId}`
 }
 
 /** 立即保存某会话的消息。 */
 export async function saveMessages<T>(sessionId: string, messages: T): Promise<T> {
-  const envelope: MessageEnvelope<T> = { updatedAt: Date.now(), messages }
+  const envelope: MessageEnvelope<T> = {
+    updatedAt: Date.now(),
+    messages: deepToPlain(messages),
+  }
   await messageStore.setItem(sessionKey(sessionId), envelope)
   return messages
 }
@@ -55,7 +80,12 @@ function conversationsKey(userId: string): string {
 
 /** 保存某用户的会话集合。 */
 export async function saveConversations<T>(userId: string, list: T): Promise<T> {
-  const envelope: MessageEnvelope<T> = { updatedAt: Date.now(), messages: list }
+  // 与消息落盘同理：集合元素仍可能是 Vue 响应式代理，
+  // 结构化克隆会抛 DataCloneError，必须先深剥离。
+  const envelope: MessageEnvelope<T> = {
+    updatedAt: Date.now(),
+    messages: deepToPlain(list),
+  }
   await messageStore.setItem(conversationsKey(userId), envelope)
   return list
 }
@@ -75,7 +105,10 @@ export function debounceSaveConversations<T>(userId: string, list: T): void {
 
   const timer = setTimeout(() => {
     conversationTimers.delete(userId)
-    void saveConversations(userId, list)
+    // 落盘失败必须显式可见：静默失败会让"刷新后数据消失"变成无头案
+    void saveConversations(userId, list).catch((error: unknown) => {
+      console.error('[本地持久化] 会话集合写入失败：', error)
+    })
   }, SAVE_DEBOUNCE_MS)
 
   conversationTimers.set(userId, timer)
@@ -94,7 +127,10 @@ export function debounceSaveMessages<T>(sessionId: string, messages: T): void {
 
   const timer = setTimeout(() => {
     debounceTimers.delete(sessionId)
-    void saveMessages(sessionId, messages)
+    // 落盘失败必须显式可见：静默失败会让"刷新后数据消失"变成无头案
+    void saveMessages(sessionId, messages).catch((error: unknown) => {
+      console.error('[本地持久化] 消息写入失败：', error)
+    })
   }, SAVE_DEBOUNCE_MS)
 
   debounceTimers.set(sessionId, timer)
