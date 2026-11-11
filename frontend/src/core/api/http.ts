@@ -11,6 +11,9 @@ import axios, { AxiosError, type AxiosInstance } from 'axios'
 /** localStorage 中 JWT 的键名（与身份切换器写入键保持一致） */
 export const TOKEN_STORAGE_KEY = 'auth_token'
 
+/** 网关统一前缀（后端所有路由挂在 /api 之下） */
+export const API_BASE = '/api'
+
 /** 归一化后的错误结构 */
 export interface ApiError {
   status: number
@@ -23,7 +26,7 @@ function readToken(): string {
 }
 
 export const http: AxiosInstance = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE,
   timeout: 30000,
 })
 

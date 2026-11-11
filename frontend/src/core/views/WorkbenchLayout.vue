@@ -7,7 +7,7 @@
  * 中栏：当前会话标示、历史/审批视图、通用输入框
  * 右栏：折叠、业务表单 slot、Trace 面板
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   Activity,
   ClipboardList,
@@ -17,69 +17,95 @@ import {
 
 import TaskApprovalPool from './TaskApprovalPool.vue'
 import TaskHistoryList from './TaskHistoryList.vue'
-import type {
-  TaskSummary,
-  WorkflowEndpoints,
-} from '../a2ui/types'
+import type { TaskSummary } from '../a2ui/types'
+import { chatStream, type StreamStatus } from '../api/agent'
 import { http } from '../api/http'
 import { useCurrentUser } from '../composables/useCurrentUser'
+import { RenderTicker } from '../engine/render_ticker'
 import { clearSession, loadMessages } from '../engine/storage'
+import { PluginRegistry, type PluginIdentity } from '../plugins/registry'
 import {
   type ApplyResult,
   useWorkbenchStore,
 } from '../workbench/useWorkbenchStore'
-
-// 端点配置由业务插件经宿主注入；缺省时子视图使用各自通用占位路径
-const props = defineProps<{
-  endpoints?: WorkflowEndpoints
-}>()
 
 // 通用工作台共享状态
 const workbench = useWorkbenchStore()
 const { state: workbenchState } = workbench
 const { setCurrentUser } = useCurrentUser()
 
-type IdentityId = 'applicant_01' | 'dispatcher_lead'
-interface Identity {
-  id: IdentityId
-  label: string
-  role: 'APPLICANT' | 'DISPATCHER'
+/** 插件未声明演示身份时的占位（不参与任何业务判定） */
+const EMPTY_IDENTITY: PluginIdentity = {
+  id: '',
+  label: '未配置身份',
+  role: '',
 }
 
-const IDENTITIES: Identity[] = [
-  { id: 'applicant_01', label: '张三 (APPLICANT)', role: 'APPLICANT' },
-  { id: 'dispatcher_lead', label: '李审批长 (DISPATCHER)', role: 'DISPATCHER' },
-]
-
-// ---- 当前身份 ----
-const identityId = ref<IdentityId>('applicant_01')
-const currentIdentity = computed(
-  () => IDENTITIES.find((item) => item.id === identityId.value)!,
+// ---- 当前身份（身份清单来自业务插件，底座不写死任何角色） ----
+const identities = computed<PluginIdentity[]>(
+  () => PluginRegistry.activeIdentities.value,
+)
+const identityId = ref<string>('')
+const currentIdentity = computed<PluginIdentity>(
+  () =>
+    identities.value.find((item) => item.id === identityId.value) ??
+    identities.value[0] ??
+    EMPTY_IDENTITY,
 )
 
 // 调后端登录端点换取真实 JWT（后端只认合规 JWT，不能写 simulated:*）
-async function loginAs(userId: IdentityId) {
+async function loginAs(userId: string) {
+  if (!userId) {
+    return
+  }
   const { data } = await http.post<{ access_token: string }>('/v1/auth/login', {
     user_id: userId,
   })
   localStorage.setItem('auth_token', data.access_token)
 }
 
-async function switchIdentity(event: Event) {
-  identityId.value = (event.target as HTMLSelectElement).value as IdentityId
+/** 已激活身份（避免重复登录；登录失败后清空以允许重试） */
+let activatedId = ''
+
+async function activateIdentity(userId: string): Promise<void> {
+  if (!userId || userId === activatedId) {
+    return
+  }
+  activatedId = userId
   try {
-    await loginAs(identityId.value)
+    await loginAs(userId)
     // 同步身份供深层卡片做权限判定
-    setCurrentUser(identityId.value, currentIdentity.value.role)
+    setCurrentUser(userId, currentIdentity.value.role)
     // 切换身份后加载该用户的会话集合（审批人本地通常为空）
-    await workbench.hydrateConversations(identityId.value)
+    await workbench.hydrateConversations(userId)
   } catch (error) {
-    console.error('身份切换失败：', error)
+    activatedId = ''
+    console.error('身份激活失败：', error)
   }
 }
 
-// ---- SSE 灯状态（默认离线；实际由后续接入的 SSEClient onStatus 更新） ----
-const sseStatus = ref<'connected' | 'reconnecting' | 'offline'>('offline')
+async function switchIdentity(event: Event) {
+  identityId.value = (event.target as HTMLSelectElement).value
+}
+
+// 身份清单由插件声明：清单到达后自动选中首个有效身份
+watch(
+  identities,
+  (list) => {
+    if (list.length && !list.some((item) => item.id === identityId.value)) {
+      identityId.value = list[0].id
+    }
+  },
+  { immediate: true, deep: true },
+)
+
+// 身份变化 → 重新登录并同步角色
+watch(identityId, (userId) => {
+  void activateIdentity(userId)
+})
+
+// ---- SSE 灯状态（由通用对话流的连接生命周期驱动） ----
+const sseStatus = ref<StreamStatus>('offline')
 const sseMeta = {
   connected: { dot: 'bg-green-500', text: 'Connected' },
   reconnecting: { dot: 'bg-amber-500', text: 'Reconnecting' },
@@ -133,10 +159,108 @@ async function wipeLocalSnapshot() {
 // 右栏开合由 store 统一持有（提交成功后自动折叠）
 const rightOpen = computed(() => workbenchState.rightDrawerOpen)
 
-function sendDraft() {
-  // 本步仅占位：通用发送逻辑后续接入
+// ---- 通用对话流（跨业务：端点与卡片协议均来自底座） ----
+const isStreaming = ref(false)
+const streamError = ref<string | null>(null)
+let abortController: AbortController | null = null
+let ticker: RenderTicker | null = null
+
+/** 发送当前输入：走通用对话网关，token 经打字机逐字渲染。 */
+async function sendDraft() {
+  const text = draftText.value.trim()
+  if (!text || isStreaming.value) {
+    return
+  }
+
   draftText.value = ''
+  streamError.value = null
+
+  const threadId = sessionId.value
+  const createdAt = new Date().toISOString()
+
+  // 用户消息立即入列
+  workbench.appendMessage({
+    id: crypto.randomUUID(),
+    thread_id: threadId,
+    role: 'user',
+    kind: 'text',
+    content: text,
+    card_type: null,
+    card_payload: null,
+    retry_payload: null,
+    created_at: createdAt,
+  })
+
+  // 助手占位消息：打字机逐字写入
+  const answerId = crypto.randomUUID()
+  workbench.appendMessage({
+    id: answerId,
+    thread_id: threadId,
+    role: 'assistant',
+    kind: 'text',
+    content: '',
+    card_type: null,
+    card_payload: null,
+    retry_payload: null,
+    created_at: createdAt,
+  })
+
+  ticker?.clear()
+  ticker = new RenderTicker((consumed) => {
+    workbench.appendMessageText(answerId, consumed)
+  })
+
+  isStreaming.value = true
+  abortController = new AbortController()
+
+  try {
+    await chatStream(
+      { thread_id: threadId, session_id: threadId, message: text },
+      {
+        onToken: (content) => ticker?.enqueue(content),
+        onCard: (cardType, data) => {
+          workbench.appendMessage({
+            id: crypto.randomUUID(),
+            thread_id: threadId,
+            role: 'assistant',
+            kind: 'card',
+            content: null,
+            card_type: cardType,
+            card_payload: { card_type: cardType, ...data },
+            retry_payload: null,
+            created_at: new Date().toISOString(),
+          })
+        },
+        onError: (message) => {
+          streamError.value = message
+        },
+        onDone: () => {
+          // 立即排空打字机缓冲区，避免尾字滞留导致落盘内容不全
+          ticker?.flush()
+          ticker = null
+          isStreaming.value = false
+        },
+        onStatus: (status) => {
+          sseStatus.value = status
+        },
+      },
+      abortController.signal,
+    )
+  } catch (error) {
+    streamError.value =
+      (error as { message?: string }).message ?? '对话连接失败，请稍后重试。'
+  } finally {
+    isStreaming.value = false
+    abortController = null
+  }
 }
+
+// 组件卸载时中止在途流，避免回调写入已销毁的状态
+onBeforeUnmount(() => {
+  abortController?.abort()
+  ticker?.clear()
+  ticker = null
+})
 
 // 暴露给装配层（App）调用
 defineExpose({ handleApplied })
@@ -144,17 +268,13 @@ defineExpose({ handleApplied })
 // 挂载时探测 IndexedDB 健康度
 onMounted(async () => {
   // 启动时为当前身份确保一个有效 JWT（旧 simulated:* / 空值会被覆盖）
-  await loginAs(identityId.value).catch((error) =>
-    console.error('启动登录失败：', error),
-  )
-  setCurrentUser(identityId.value, currentIdentity.value.role)
-  await workbench.hydrateConversations(identityId.value)
+  await activateIdentity(currentIdentity.value.id)
   await checkStorage()
 })
 </script>
 
 <template>
-  <div class="flex h-screen flex-col bg-white text-gray-800">
+  <div class="flex h-full flex-col bg-white text-gray-800">
     <!-- Header -->
     <header
       class="flex h-14 shrink-0 items-center justify-between border-b bg-white px-4"
@@ -175,14 +295,15 @@ onMounted(async () => {
         </span>
       </div>
 
-      <!-- 身份切换 -->
+      <!-- 身份切换（身份清单来自业务插件） -->
       <select
-        class="rounded-md border border-gray-300 px-2 py-1 text-xs"
+        class="rounded-md border border-gray-300 px-2 py-1 text-xs disabled:opacity-50"
         :value="identityId"
+        :disabled="identities.length === 0"
         @change="switchIdentity"
       >
-        <option v-for="item in IDENTITIES" :key="item.id" :value="item.id">
-          {{ item.label }}
+        <option v-for="item in identities" :key="item.id" :value="item.id">
+          {{ item.label }} ({{ item.role }})
         </option>
       </select>
     </header>
@@ -310,7 +431,6 @@ onMounted(async () => {
             v-else
             :current-user-id="currentIdentity.id"
             :current-role="currentIdentity.role"
-            :endpoints="props.endpoints"
           />
         </div>
 
@@ -320,33 +440,45 @@ onMounted(async () => {
             <input
               v-model="draftText"
               type="text"
-              class="flex-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm"
+              class="flex-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm disabled:bg-gray-50"
               placeholder="输入消息…"
+              :disabled="isStreaming"
               @keyup.enter="sendDraft"
             />
             <button
               type="button"
-              class="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white"
+              class="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+              :disabled="isStreaming || !draftText.trim()"
               @click="sendDraft"
             >
-              发送
+              {{ isStreaming ? '生成中…' : '发送' }}
             </button>
             <button
               type="button"
-              class="rounded-md border border-gray-300 px-2 py-1.5 text-xs"
+              class="rounded-md border border-gray-300 px-2 py-1.5 text-xs hover:bg-gray-50"
+              title="展开右栏业务表单"
+              @click="workbench.setRightDrawer(true)"
             >
               📋 快速填报
             </button>
           </div>
+
+          <!-- 流异常提示：明确反馈，不静默失败 -->
+          <p v-if="streamError" class="mt-1.5 text-xs text-red-600">
+            {{ streamError }}
+          </p>
         </div>
       </main>
 
       <!-- 右栏 -->
+      <!-- 折叠态保留 w-10 把手轨道：absolute 按钮需相对本 aside 定位，
+           若容器宽度归零则把手仍会溢出视口外，导致右栏无法重新展开。 -->
       <aside
-        class="flex flex-col border-l bg-gray-50/50 transition-all duration-300"
-        :class="rightOpen ? 'w-80' : 'w-0'"
+        class="relative flex flex-col border-l bg-gray-50/50 transition-all duration-300"
+        :class="rightOpen ? 'w-80' : 'w-10'"
       >
-        <div v-if="rightOpen" class="flex h-full flex-col">
+        <!-- v-show 而非 v-if：折叠时不销毁业务表单，已填数据得以保留 -->
+        <div v-show="rightOpen" class="flex h-full flex-col">
           <div class="flex items-center justify-between p-3">
             <span class="text-xs font-medium">业务表单</span>
             <button
@@ -375,11 +507,12 @@ onMounted(async () => {
           </div>
         </div>
 
-        <!-- 折叠态重新展开 -->
+        <!-- 折叠态重新展开把手：相对 aside 定位（left-0），不再逃逸出 overflow-hidden -->
         <button
           v-if="!rightOpen"
           type="button"
-          class="absolute"
+          class="absolute left-0 top-2 z-10 h-8 w-6 rounded-l-md border border-r-0 border-gray-300 bg-white text-sm leading-none text-gray-500 shadow-sm hover:bg-gray-50 hover:text-gray-700"
+          title="展开右栏"
           @click="workbench.setRightDrawer(true)"
         >
           ›

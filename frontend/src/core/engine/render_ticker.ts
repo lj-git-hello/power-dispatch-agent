@@ -106,4 +106,16 @@ export class RenderTicker {
     this.queue.length = 0
     this.pending = ''
   }
+
+  /**
+   * 立即排空缓冲区并停止调度（流结束时调用）。
+   *
+   * 正常打字机按帧消费，流结束后若仍有积压会出现"尾字滞留"，
+   * 故在 done 事件里一次性吐出剩余内容，保证落盘内容完整。
+   */
+  flush(): void {
+    const consumed = this.drainChars(this.bufferedLength)
+    this.stop()
+    if (consumed) this.onTick(consumed)
+  }
 }

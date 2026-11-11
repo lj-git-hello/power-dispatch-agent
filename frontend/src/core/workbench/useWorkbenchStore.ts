@@ -16,6 +16,7 @@ import type {
 } from '../a2ui/types'
 import {
   debounceSaveConversations,
+  debounceSaveMessages,
   loadConversations,
   loadMessages,
 } from '../engine/storage'
@@ -53,6 +54,18 @@ function setSession(sessionId: string, messages: ChatMessageRecord[] = []) {
 /** 直接追加一条消息（外部 hydrate / 文本回执均可）。 */
 function appendMessage(message: ChatMessageRecord) {
   state.activeMessages.push(message)
+}
+
+/**
+ * 向指定消息追加文本（流式打字机逐字写入）。
+ *
+ * 通过响应式数组取回消息代理后再改写，确保触发视图更新；
+ * 消息不存在时静默忽略（流已结束或会话已切换）。
+ */
+function appendMessageText(id: string, chunk: string) {
+  const target = state.activeMessages.find((item) => item.id === id)
+  if (!target) return
+  target.content = (target.content ?? '') + chunk
 }
 
 /** 选中某条会话：切换到其 session_id 并从 IndexedDB 恢复消息。 */
@@ -144,11 +157,24 @@ watch(
   { deep: true },
 )
 
+// 当前会话消息变更（流式打字机逐字写入）→ 按会话防抖落盘
+// 落盘责任统一收敛在 store：视图层不做持久化，避免切换 Tab 时丢失记录。
+watch(
+  () => state.activeMessages,
+  (list) => {
+    if (state.activeSessionId) {
+      debounceSaveMessages(state.activeSessionId, [...list])
+    }
+  },
+  { deep: true },
+)
+
 export function useWorkbenchStore() {
   return {
     state,
     setSession,
     appendMessage,
+    appendMessageText,
     openConversation,
     hydrateConversations,
     applyResult,

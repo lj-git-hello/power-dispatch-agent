@@ -60,12 +60,16 @@ export interface TaskSummary {
 /**
  * WorkflowEndpoints —— 工作流端点配置（依赖反转）。
  * 由各业务插件提供具体 URL，core 视图不写死任何业务路径。
+ *
+ * 路径一律相对 /api（与 http baseURL 对齐）；后端 manifest 为唯一真相源。
  */
 export interface WorkflowEndpoints {
   /** 待办列表端点 */
   tasks: string
   /** 某线程消息端点 */
   messages: string
-  /** 恢复/核签端点 */
+  /** 恢复/审批端点 */
   resume: string
+  /** 业务提报端点（可缺省：非提报型业务插件无需提供） */
+  apply?: string
 }
