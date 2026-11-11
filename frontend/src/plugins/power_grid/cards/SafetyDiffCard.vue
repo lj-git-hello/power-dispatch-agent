@@ -9,6 +9,7 @@
 import { computed } from 'vue'
 
 import { useWorkflowAction } from '@/core/composables/useWorkflowAction'
+import { useCurrentUser } from '@/core/composables/useCurrentUser'
 import type { ChatMessageRecord } from '@/core/a2ui/types'
 
 const props = defineProps<{
@@ -37,8 +38,13 @@ const violations = computed<string[]>(
 )
 
 const AUDIT_URL = '/v1/power-dispatch/audit'
+const ROLE_DISPATCHER = 'DISPATCHER'
 
 const { isSubmitting, notice, submitAudit } = useWorkflowAction()
+const { hasAnyRole } = useCurrentUser()
+
+/** 仅调度长可核签；提报员只读，按钮禁用。 */
+const canAudit = computed(() => hasAnyRole(ROLE_DISPATCHER))
 
 async function decide(permitted: boolean) {
   await submitAudit(
@@ -85,7 +91,12 @@ async function decide(permitted: boolean) {
       【冲突拦截】该工单已被其他操作人处理或版本已失效
     </p>
 
-    <div class="flex gap-2">
+    <!-- 提报员：只读等待提示 -->
+    <p v-if="!canAudit" class="rounded-md bg-blue-50 px-2 py-1.5 text-xs text-blue-700">
+      工单已挂起并流转至调度长审批池，等待核签中...
+    </p>
+
+    <div v-else class="flex gap-2">
       <button
         type="button"
         class="flex-1 rounded-md bg-green-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
@@ -96,7 +107,7 @@ async function decide(permitted: boolean) {
       </button>
       <button
         type="button"
-        class="flex-1 rounded-md bg-gray-200 px-3 py-1.5 text-sm text-gray-700 disabled:opacity-50"
+        class="flex-1 rounded-md bg-gray-200 px-2 py-1.5 text-sm text-gray-700 disabled:opacity-50"
         :disabled="isSubmitting"
         @click="decide(false)"
       >
