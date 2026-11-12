@@ -49,11 +49,14 @@ class VectorStoreService:
         doc_codes = list({chunk.doc_code for chunk in batch})
 
         async with AsyncSessionLocal() as session:
-            # 一次查询本批涉及 doc_code 的全部已存在切片内容
+            # 一次查询本批涉及 doc_code 的全部【有效】切片内容。
+            # 必须过滤 is_active：软废止的行（is_active=FALSE）仅作历史留痕，
+            # 不应阻止同一 doc_code + content 的新版本重新入库，
+            # 否则 rag_ingest_file.py --overwrite 与重灌流程会被幂等防重全部拦空。
             existing_rows = await session.execute(
                 text(
                     "SELECT doc_code, content FROM ai_knowledge_base "
-                    "WHERE doc_code = ANY(:codes)"
+                    "WHERE doc_code = ANY(:codes) AND is_active = TRUE"
                 ),
                 {"codes": doc_codes},
             )
