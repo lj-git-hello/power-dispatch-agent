@@ -14,6 +14,7 @@ import math
 import os
 import struct
 from collections.abc import Sequence
+from typing import Any
 
 import openai
 
@@ -34,6 +35,7 @@ ENV_EMBEDDING_API_KEY = "EMBEDDING_API_KEY"
 ENV_EMBEDDING_BASE_URL = "EMBEDDING_BASE_URL"
 ENV_EMBEDDING_MODEL_NAME = "EMBEDDING_MODEL_NAME"
 ENV_EMBEDDING_DIM = "EMBEDDING_DIM"
+ENV_EMBEDDING_SUPPORTS_DIMENSIONS = "EMBEDDING_SUPPORTS_DIMENSIONS"
 
 # 未显式配置时的回退：复用聊天侧入口 / 凭证
 ENV_FALLBACK_API_KEY = "OPENAI_API_KEY"
@@ -42,8 +44,14 @@ ENV_FALLBACK_BASE_URL = "OPENAI_BASE_URL"
 # 默认向量模型（火山方舟 doubao-embedding-vision）。
 # 该模型原生 2048 维，但支持 Matryoshka 套娃降维；此处显式请求 1024 维——
 # 既满足 pgvector ANN 索引 ≤2000 维的硬限制，又保持完整可用的向量表示。
+#
+# ⚠️ 本值仅是 env 缺失时的最后兜底，**必须与 EMBEDDING_BASE_URL 同源**。
+# 生产环境的向量服务一律由 backend/.env 的 EMBEDDING_* 三件套指定。
 DEFAULT_MODEL_NAME = "doubao-embedding-vision"
 DEFAULT_EMBEDDING_DIM = 1024
+
+# 视为"真"的开关取值（大小写不敏感）
+_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 def _resolve_embedding_dim() -> int:
@@ -55,8 +63,23 @@ def _resolve_embedding_dim() -> int:
         return DEFAULT_EMBEDDING_DIM
 
 
+def _resolve_supports_dimensions() -> bool:
+    """读取是否向供应商下发 dimensions 参数，默认关闭。
+
+    关闭时由供应商返回模型原生维度（如 BAAI/bge-m3 原生 1024 维）。
+    仅当所用模型支持 Matryoshka 套娃降维（如 doubao-embedding-vision
+    需从 2048 降到 1024）时才应开启——部分供应商对不支持降维的模型
+    传入 dimensions 会直接返回 HTTP 400。
+    """
+    raw = os.getenv(ENV_EMBEDDING_SUPPORTS_DIMENSIONS, "").strip().lower()
+    return raw in _TRUTHY_VALUES
+
+
 # 输出向量维度，与 ai_knowledge_base.embedding Vector 维度绑定
 EMBEDDING_DIM = _resolve_embedding_dim()
+
+# 是否下发 dimensions 参数（供应商能力差异，由配置决定，不硬编码模型名单）
+EMBEDDING_SUPPORTS_DIMENSIONS = _resolve_supports_dimensions()
 
 
 class EmbeddingService:
@@ -120,12 +143,16 @@ class EmbeddingService:
     async def _embed_batch_real(
         self, batch: Sequence[str]
     ) -> list[list[float]]:
-        # 显式传 dimensions 触发 Matryoshka 降维到 1024
-        response = await self._client.embeddings.create(
-            model=self.model_name,
-            input=list(batch),
-            dimensions=EMBEDDING_DIM,
-        )
+        # 仅在供应商支持降维时才下发 dimensions；
+        # 否则使用模型原生维度（bge-m3 = 1024，与表结构一致）
+        request_kwargs: dict[str, Any] = {
+            "model": self.model_name,
+            "input": list(batch),
+        }
+        if EMBEDDING_SUPPORTS_DIMENSIONS:
+            request_kwargs["dimensions"] = EMBEDDING_DIM
+
+        response = await self._client.embeddings.create(**request_kwargs)
         # API 返回按 index 排序；显式按 index 排序更稳妥
         return [
             item.embedding for item in sorted(response.data, key=lambda d: d.index)
