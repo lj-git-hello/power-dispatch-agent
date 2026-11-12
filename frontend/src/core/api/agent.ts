@@ -35,8 +35,21 @@ export interface AgentChatEvent {
   message?: string | null
 }
 
-/** 流连接状态（驱动界面状态灯） */
-export type StreamStatus = 'connected' | 'reconnecting' | 'offline'
+/** 流连接状态（驱动界面状态灯）
+ *
+ * idle        —— 当前没有进行中的对话流（登录后 / 空闲期），并非断网；
+ * connected   —— 对话流已建立；
+ * reconnecting—— 断线自动重连中；
+ * offline     —— 流已真正断开（致命错误或重连超限）。
+ *
+ * 注意：本类型描述的是"对话流"的连接状态，不代表后端服务可达性。
+ * `idle` 只作为界面初始态使用，chatStream 本身不产生该状态。
+ */
+export type StreamStatus =
+  | 'idle'
+  | 'connected'
+  | 'reconnecting'
+  | 'offline'
 
 /** 事件回调集合 */
 export interface ChatStreamHandlers {

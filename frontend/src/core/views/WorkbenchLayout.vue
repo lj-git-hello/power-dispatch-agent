@@ -105,12 +105,18 @@ watch(identityId, (userId) => {
 })
 
 // ---- SSE 灯状态（由通用对话流的连接生命周期驱动） ----
-const sseStatus = ref<StreamStatus>('offline')
+// 注意：这盏灯反映的是"对话流"而非"网络连通性"——登录本身不建立流，
+// 空闲期无流可查属于正常状态，不可用 Offline 这类断网措辞误导用户。
+const sseStatus = ref<StreamStatus>('idle')
 const sseMeta = {
+  idle: { dot: 'bg-gray-400', text: 'Idle' },
   connected: { dot: 'bg-green-500', text: 'Connected' },
   reconnecting: { dot: 'bg-amber-500', text: 'Reconnecting' },
-  offline: { dot: 'bg-gray-400', text: 'Offline' },
+  offline: { dot: 'bg-red-500', text: 'Disconnected' },
 } as const
+/** 状态灯悬浮说明：明确它反映的是对话流，而非网络连通性 */
+const sseStatusHint =
+  '对话流（SSE）状态：Idle = 当前没有进行中的对话流，不代表后端离线'
 
 // ---- 当前会话（ID 与消息由共享 store 持有） ----
 function newSessionId(): string {
@@ -276,32 +282,23 @@ onMounted(async () => {
 <template>
   <div class="flex h-full flex-col bg-white text-gray-800">
     <!-- Header -->
-    <header
-      class="flex h-14 shrink-0 items-center justify-between border-b bg-white px-4"
-    >
+    <header class="flex h-14 shrink-0 items-center justify-between border-b bg-white px-4">
       <div class="flex items-center gap-2">
         <Activity class="h-5 w-5 text-blue-600" />
-        <span class="text-sm font-semibold">Universal Agent Workbench</span>
+        <span class="text-sm font-semibold">企业级 AI Agent 应用平台</span>
       </div>
 
       <!-- SSE 状态灯 -->
       <div class="flex items-center gap-1.5">
-        <span
-          class="h-2 w-2 rounded-full"
-          :class="sseMeta[sseStatus].dot"
-        />
-        <span class="text-xs text-gray-500">
+        <span class="h-2 w-2 rounded-full" :class="sseMeta[sseStatus].dot" />
+        <span class="text-xs text-gray-500" :title="sseStatusHint">
           {{ sseMeta[sseStatus].text }}
         </span>
       </div>
 
       <!-- 身份切换（身份清单来自业务插件） -->
-      <select
-        class="rounded-md border border-gray-300 px-2 py-1 text-xs disabled:opacity-50"
-        :value="identityId"
-        :disabled="identities.length === 0"
-        @change="switchIdentity"
-      >
+      <select class="rounded-md border border-gray-300 px-2 py-1 text-xs disabled:opacity-50" :value="identityId"
+        :disabled="identities.length === 0" @change="switchIdentity">
         <option v-for="item in identities" :key="item.id" :value="item.id">
           {{ item.label }} ({{ item.role }})
         </option>
@@ -313,11 +310,9 @@ onMounted(async () => {
       <!-- 左栏 -->
       <aside class="flex w-72 shrink-0 flex-col border-r bg-gray-50">
         <div class="p-3">
-          <button
-            type="button"
+          <button type="button"
             class="flex w-full items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-sm text-white"
-            @click="createNewSession"
-          >
+            @click="createNewSession">
             <Plus class="h-4 w-4" />
             新建会话
           </button>
@@ -325,28 +320,16 @@ onMounted(async () => {
 
         <!-- Tab -->
         <div class="flex gap-1 px-3">
-          <button
-            type="button"
-            class="rounded-md px-3 py-1 text-xs"
-            :class="
-              activeTab === 'history'
-                ? 'bg-blue-100 text-blue-700'
-                : 'text-gray-500 hover:bg-gray-100'
-            "
-            @click="activeTab = 'history'"
-          >
+          <button type="button" class="rounded-md px-3 py-1 text-xs" :class="activeTab === 'history'
+            ? 'bg-blue-100 text-blue-700'
+            : 'text-gray-500 hover:bg-gray-100'
+            " @click="activeTab = 'history'">
             我的会话
           </button>
-          <button
-            type="button"
-            class="rounded-md px-3 py-1 text-xs"
-            :class="
-              activeTab === 'approval'
-                ? 'bg-blue-100 text-blue-700'
-                : 'text-gray-500 hover:bg-gray-100'
-            "
-            @click="activeTab = 'approval'"
-          >
+          <button type="button" class="rounded-md px-3 py-1 text-xs" :class="activeTab === 'approval'
+            ? 'bg-blue-100 text-blue-700'
+            : 'text-gray-500 hover:bg-gray-100'
+            " @click="activeTab = 'approval'">
             待办审批池
           </button>
         </div>
@@ -354,25 +337,15 @@ onMounted(async () => {
         <!-- 列表树：Tab1 渲染【我的会话】集合 -->
         <div class="flex-1 overflow-y-auto p-3">
           <template v-if="activeTab === 'history'">
-            <p
-              v-if="workbenchState.conversationList.length === 0"
-              class="text-xs text-gray-400"
-            >
+            <p v-if="workbenchState.conversationList.length === 0" class="text-xs text-gray-400">
               暂无会话，可在右侧填报发起
             </p>
 
-            <button
-              v-for="item in workbenchState.conversationList"
-              :key="item.thread_id"
-              type="button"
-              class="mb-2 w-full rounded-md border p-2 text-left transition hover:bg-white"
-              :class="
-                sessionId === item.session_id
-                  ? 'border-blue-500 bg-blue-50'
-                  : 'border-gray-200 bg-white'
-              "
-              @click="selectConversation(item)"
-            >
+            <button v-for="item in workbenchState.conversationList" :key="item.thread_id" type="button"
+              class="mb-2 w-full rounded-md border p-2 text-left transition hover:bg-white" :class="sessionId === item.session_id
+                ? 'border-blue-500 bg-blue-50'
+                : 'border-gray-200 bg-white'
+                " @click="selectConversation(item)">
               <div class="flex items-center gap-1.5">
                 <ClipboardList class="h-3.5 w-3.5 shrink-0 text-gray-400" />
                 <span class="truncate text-xs font-medium text-gray-800">
@@ -380,9 +353,7 @@ onMounted(async () => {
                 </span>
               </div>
               <div class="mt-1 flex items-center gap-1.5">
-                <span
-                  class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-700"
-                >
+                <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-700">
                   {{ item.status }}
                 </span>
                 <span class="text-[10px] text-gray-500">
@@ -403,11 +374,8 @@ onMounted(async () => {
           <p class="text-[10px] text-gray-500">
             IndexedDB：{{ storageHealthy ? '健康' : '异常' }}
           </p>
-          <button
-            type="button"
-            class="mt-1 flex items-center gap-1 text-[10px] text-gray-500 hover:text-red-600"
-            @click="wipeLocalSnapshot"
-          >
+          <button type="button" class="mt-1 flex items-center gap-1 text-[10px] text-gray-500 hover:text-red-600"
+            @click="wipeLocalSnapshot">
             <Trash2 class="h-3 w-3" />
             清空本地快照
           </button>
@@ -421,44 +389,23 @@ onMounted(async () => {
         </div>
 
         <div class="flex-1 overflow-hidden">
-          <TaskHistoryList
-            v-if="activeTab === 'history'"
-            :session-id="sessionId"
-            :current-user-id="currentIdentity.id"
-            :messages="workbenchState.activeMessages"
-          />
-          <TaskApprovalPool
-            v-else
-            :current-user-id="currentIdentity.id"
-            :current-role="currentIdentity.role"
-          />
+          <TaskHistoryList v-if="activeTab === 'history'" :session-id="sessionId" :current-user-id="currentIdentity.id"
+            :messages="workbenchState.activeMessages" />
+          <TaskApprovalPool v-else :current-user-id="currentIdentity.id" :current-role="currentIdentity.role" />
         </div>
 
         <!-- 通用输入 -->
         <div class="border-t p-3">
           <div class="flex items-center gap-2">
-            <input
-              v-model="draftText"
-              type="text"
+            <input v-model="draftText" type="text"
               class="flex-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm disabled:bg-gray-50"
-              placeholder="输入消息…"
-              :disabled="isStreaming"
-              @keyup.enter="sendDraft"
-            />
-            <button
-              type="button"
-              class="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
-              :disabled="isStreaming || !draftText.trim()"
-              @click="sendDraft"
-            >
+              placeholder="输入消息…" :disabled="isStreaming" @keyup.enter="sendDraft" />
+            <button type="button" class="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+              :disabled="isStreaming || !draftText.trim()" @click="sendDraft">
               {{ isStreaming ? '生成中…' : '发送' }}
             </button>
-            <button
-              type="button"
-              class="rounded-md border border-gray-300 px-2 py-1.5 text-xs hover:bg-gray-50"
-              title="展开右栏业务表单"
-              @click="workbench.setRightDrawer(true)"
-            >
+            <button type="button" class="rounded-md border border-gray-300 px-2 py-1.5 text-xs hover:bg-gray-50"
+              title="展开右栏业务表单" @click="workbench.setRightDrawer(true)">
               📋 快速填报
             </button>
           </div>
@@ -473,19 +420,13 @@ onMounted(async () => {
       <!-- 右栏 -->
       <!-- 折叠态保留 w-10 把手轨道：absolute 按钮需相对本 aside 定位，
            若容器宽度归零则把手仍会溢出视口外，导致右栏无法重新展开。 -->
-      <aside
-        class="relative flex flex-col border-l bg-gray-50/50 transition-all duration-300"
-        :class="rightOpen ? 'w-80' : 'w-10'"
-      >
+      <aside class="relative flex flex-col border-l bg-gray-50/50 transition-all duration-300"
+        :class="rightOpen ? 'w-80' : 'w-10'">
         <!-- v-show 而非 v-if：折叠时不销毁业务表单，已填数据得以保留 -->
         <div v-show="rightOpen" class="flex h-full flex-col">
           <div class="flex items-center justify-between p-3">
             <span class="text-xs font-medium">业务表单</span>
-            <button
-              type="button"
-              class="text-xs text-gray-500"
-              @click="workbench.setRightDrawer(false)"
-            >
+            <button type="button" class="text-xs text-gray-500" @click="workbench.setRightDrawer(false)">
               收起
             </button>
           </div>
@@ -508,13 +449,9 @@ onMounted(async () => {
         </div>
 
         <!-- 折叠态重新展开把手：相对 aside 定位（left-0），不再逃逸出 overflow-hidden -->
-        <button
-          v-if="!rightOpen"
-          type="button"
+        <button v-if="!rightOpen" type="button"
           class="absolute left-0 top-2 z-10 h-8 w-6 rounded-l-md border border-r-0 border-gray-300 bg-white text-sm leading-none text-gray-500 shadow-sm hover:bg-gray-50 hover:text-gray-700"
-          title="展开右栏"
-          @click="workbench.setRightDrawer(true)"
-        >
+          title="展开右栏" @click="workbench.setRightDrawer(true)">
           ›
         </button>
       </aside>
